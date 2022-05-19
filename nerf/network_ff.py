@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from encoding import get_encoder
-from activation import trunc_exp
-from ffmlp import FFMLP
+from torch_ngp.encoding import get_encoder
+from torch_ngp.activation import trunc_exp
+from torch_ngp.ffmlp import FFMLP
 
 from .renderer import NeRFRenderer
 
@@ -29,25 +29,25 @@ class NeRFNetwork(NeRFRenderer):
         self.encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound)
 
         self.sigma_net = FFMLP(
-            input_dim=self.in_dim, 
+            input_dim=self.in_dim,
             output_dim=1 + self.geo_feat_dim,
             hidden_dim=self.hidden_dim,
             num_layers=self.num_layers,
         )
 
         # color network
-        self.num_layers_color = num_layers_color        
+        self.num_layers_color = num_layers_color
         self.hidden_dim_color = hidden_dim_color
         self.encoder_dir, self.in_dim_color = get_encoder(encoding_dir)
         self.in_dim_color += self.geo_feat_dim + 1 # a manual fixing to make it 32, as done in nerf_network.h#178
-        
+
         self.color_net = FFMLP(
-            input_dim=self.in_dim_color, 
+            input_dim=self.in_dim_color,
             output_dim=3,
             hidden_dim=self.hidden_dim_color,
             num_layers=self.num_layers_color,
         )
-    
+
     def forward(self, x, d):
         # x: [N, 3], in [-bound, bound]
         # d: [N, 3], nomalized in [-1, 1]
@@ -60,14 +60,14 @@ class NeRFNetwork(NeRFRenderer):
         sigma = trunc_exp(h[..., 0])
         geo_feat = h[..., 1:]
 
-        # color        
+        # color
         d = self.encoder_dir(d)
 
         # TODO: preallocate space and avoid this cat?
         p = torch.zeros_like(geo_feat[..., :1]) # manual input padding
         h = torch.cat([d, geo_feat, p], dim=-1)
         h = self.color_net(h)
-        
+
         # sigmoid activation for rgb
         rgb = torch.sigmoid(h)
 
@@ -116,7 +116,7 @@ class NeRFNetwork(NeRFRenderer):
         h = torch.cat([d, geo_feat, p], dim=-1)
 
         h = self.color_net(h)
-        
+
         # sigmoid activation for rgb
         h = torch.sigmoid(h)
 

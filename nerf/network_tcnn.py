@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 
 import tinycudann as tcnn
-from activation import trunc_exp
+from torch_ngp.activation import trunc_exp
 from .renderer import NeRFRenderer
 
 
@@ -55,7 +55,7 @@ class NeRFNetwork(NeRFRenderer):
         )
 
         # color network
-        self.num_layers_color = num_layers_color        
+        self.num_layers_color = num_layers_color
         self.hidden_dim_color = hidden_dim_color
 
         self.encoder_dir = tcnn.Encoding(
@@ -80,7 +80,7 @@ class NeRFNetwork(NeRFRenderer):
             },
         )
 
-    
+
     def forward(self, x, d):
         # x: [N, 3], in [-bound, bound]
         # d: [N, 3], nomalized in [-1, 1]
@@ -102,7 +102,7 @@ class NeRFNetwork(NeRFRenderer):
         #p = torch.zeros_like(geo_feat[..., :1]) # manual input padding
         h = torch.cat([d, geo_feat], dim=-1)
         h = self.color_net(h)
-        
+
         # sigmoid activation for rgb
         color = torch.sigmoid(h)
 
@@ -146,7 +146,7 @@ class NeRFNetwork(NeRFRenderer):
 
         h = torch.cat([d, geo_feat], dim=-1)
         h = self.color_net(h)
-        
+
         # sigmoid activation for rgb
         h = torch.sigmoid(h)
 
@@ -155,7 +155,7 @@ class NeRFNetwork(NeRFRenderer):
         else:
             rgbs = h
 
-        return rgbs        
+        return rgbs
 
     # optimizer utils
     def get_params(self, lr):
@@ -164,10 +164,10 @@ class NeRFNetwork(NeRFRenderer):
             {'params': self.encoder.parameters(), 'lr': lr},
             {'params': self.sigma_net.parameters(), 'lr': lr},
             {'params': self.encoder_dir.parameters(), 'lr': lr},
-            {'params': self.color_net.parameters(), 'lr': lr}, 
+            {'params': self.color_net.parameters(), 'lr': lr},
         ]
         if self.bg_radius > 0:
             params.append({'params': self.encoder_bg.parameters(), 'lr': lr})
             params.append({'params': self.bg_net.parameters(), 'lr': lr})
-        
+
         return params
