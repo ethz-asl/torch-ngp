@@ -21,6 +21,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader
+from matplotlib import cm
 
 import trimesh
 import mcubes
@@ -576,12 +577,9 @@ class Trainer(object):
 
                 if self.opt.color_space == 'linear':
                     preds = linear_to_srgb(preds)
-
-                pred = preds[0].detach().cpu().numpy()
-                pred_depth = preds_depth[0].detach().cpu().numpy()
-
-                cv2.imwrite(path, cv2.cvtColor((pred * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
-                cv2.imwrite(path_depth, (pred_depth * 255).astype(np.uint8))
+                preds_depth = preds_depth / np.max(np.max(preds_depth, axis=-2), axis=-2)[:, None, None, :]
+                cv2.imwrite(path, cv2.cvtColor((preds[0].detach().cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
+                cv2.imwrite(path_depth, (preds_depth[0].detach().cpu().numpy() * 255).astype(np.uint8))
 
                 pbar.update(1)
 
@@ -850,18 +848,16 @@ class Trainer(object):
                     save_path_depth = os.path.join(self.workspace, 'validation', f'depth_{self.name}_{self.local_step:04d}.png')
                     #save_path_gt = os.path.join(self.workspace, 'validation', f'{self.name}_{self.epoch:04d}_{self.local_step:04d}_gt.png')
 
+                    normalized_depth = 1.0 - torch.clip(preds_depth, 0.0, 10.0) / 10.0
+
                     #self.log(f"==> Saving validation image to {save_path}")
                     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
                     if self.opt.color_space == 'linear':
                         preds = linear_to_srgb(preds)
+                    cv2.imwrite(save_path, cv2.cvtColor((preds[0].detach().cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
 
-                    pred = preds[0].detach().cpu().numpy()
-                    pred_depth = preds_depth[0].detach().cpu().numpy()
-
-                    cv2.imwrite(save_path, cv2.cvtColor((pred * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
-                    cv2.imwrite(save_path_depth, (pred_depth * 255).astype(np.uint8))
-                    #cv2.imwrite(save_path_gt, cv2.cvtColor((linear_to_srgb(truths[0].detach().cpu().numpy()) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
+                    cv2.imwrite(save_path_depth, cv2.cvtColor((cm.inferno(normalized_depth[0].detach().cpu().numpy()) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
+                    #cv2.imwrite(save_path_gt, cv2.cvtColor((truths[0].detach().cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
 
                     pbar.set_description(f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f})")
                     pbar.update(1)

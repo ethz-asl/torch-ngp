@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,7 +27,8 @@ class NeRFNetwork(NeRFRenderer):
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
         self.geo_feat_dim = geo_feat_dim
-        self.encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound)
+
+        self.encoder, self.in_dim = get_encoder(encoding, desired_resolution=2**16)
 
         self.sigma_net = FFMLP(
             input_dim=self.in_dim,

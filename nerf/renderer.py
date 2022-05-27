@@ -9,6 +9,10 @@ import torch.nn.functional as F
 from torch_ngp import raymarching
 from .utils import custom_meshgrid
 
+MAX_DISTANCE = 100.0
+NEAR = 0.05
+FAR = 10.0
+
 def sample_pdf(bins, weights, n_samples, det=False):
     # This implementation is from NeRF
     # bins: [B, T], old_z_vals
@@ -79,7 +83,17 @@ class NeRFRenderer(nn.Module):
 
         # prepare aabb with a 6D tensor (xmin, ymin, zmin, xmax, ymax, zmax)
         # NOTE: aabb (can be rectangular) is only used to generate points, we still rely on bound (always cubic) to calculate density grid and hashing.
-        aabb_train = torch.FloatTensor([-bound, -bound, -bound, bound, bound, bound])
+        if hasattr(bound, 'shape'):
+            max_bound = np.abs(bound[1] - bound[0]).max()
+            aabb_train = torch.FloatTensor([-max_bound, -max_bound, -max_bound, max_bound, max_bound, max_bound])
+            self.bound = max_bound
+        else:
+            aabb_train = torch.FloatTensor([-bound, -bound, -bound, bound, bound, bound])
+            self.bound = bound
+
+        self.cascade = 1 + math.ceil(math.log2(self.bound))
+        self.density_scale = density_scale
+
         aabb_infer = aabb_train.clone()
         self.register_buffer('aabb_train', aabb_train)
         self.register_buffer('aabb_infer', aabb_infer)
@@ -156,7 +170,8 @@ class NeRFRenderer(nn.Module):
 
         # generate xyzs
         xyzs = rays_o.unsqueeze(-2) + rays_d.unsqueeze(-2) * z_vals.unsqueeze(-1) # [N, 1, 3] * [N, T, 1] -> [N, T, 3]
-        xyzs = torch.min(torch.max(xyzs, aabb[:3]), aabb[3:]) # a manual clip.
+        # xyzs = torch.clip(xyzs, NEAR, FAR)
+        # xyzs = torch.min(torch.max(xyzs, aabb[:3]), aabb[3:]) # a manual clip.
 
         #plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
 
@@ -183,7 +198,8 @@ class NeRFRenderer(nn.Module):
                 new_z_vals = sample_pdf(z_vals_mid, weights[:, 1:-1], upsample_steps, det=not self.training).detach() # [N, t]
 
                 new_xyzs = rays_o.unsqueeze(-2) + rays_d.unsqueeze(-2) * new_z_vals.unsqueeze(-1) # [N, 1, 3] * [N, t, 1] -> [N, t, 3]
-                new_xyzs = torch.min(torch.max(new_xyzs, aabb[:3]), aabb[3:]) # a manual clip.
+                # new_xyzs = torch.clip(new_xyzs, NEAR, FAR)
+                # new_xyzs = torch.min(torch.max(new_xyzs, aabb[:3]), aabb[3:]) # a manual clip.
 
             # only forward new points to save computation
             new_density_outputs = self.density(new_xyzs.reshape(-1, 3))
@@ -222,8 +238,12 @@ class NeRFRenderer(nn.Module):
         weights_sum = weights.sum(dim=-1) # [N]
 
         # calculate depth
-        ori_z_vals = ((z_vals - nears) / (fars - nears)).clamp(0, 1)
-        depth = torch.sum(weights * ori_z_vals, dim=-1)
+        ori_z_vals = (z_vals - nears) / (fars - nears)
+        depth = (weights * z_vals).sum(dim=-1)
+
+        # depth = (weights * ori_z_vals).sum(dim=-1)
+        # ori_z_vals = ((z_vals - nears) / (fars - nears)).clamp(0, 1)
+        # depth = torch.sum(weights * ori_z_vals, dim=-1)
 
         # calculate color
         image = torch.sum(weights.unsqueeze(-1) * rgbs, dim=-2) # [N, 3], in [0, 1]

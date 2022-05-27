@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from torch_ngp.encoding import get_encoder
 import numpy as np
 
 import tinycudann as tcnn
@@ -11,7 +11,7 @@ from .renderer import NeRFRenderer
 
 class NeRFNetwork(NeRFRenderer):
     def __init__(self,
-                 encoding="HashGrid",
+                 encoding="hashgrid",
                  encoding_dir="SphericalHarmonics",
                  num_layers=2,
                  hidden_dim=64,
@@ -30,23 +30,16 @@ class NeRFNetwork(NeRFRenderer):
 
         per_level_scale = np.exp2(np.log2(2048 * bound / 16) / (16 - 1))
 
-        self.encoder = tcnn.Encoding(
-            n_input_dims=3,
-            encoding_config={
-                "otype": "HashGrid",
-                "n_levels": 16,
-                "n_features_per_level": 2,
-                "log2_hashmap_size": 19,
-                "base_resolution": 16,
-                "per_level_scale": per_level_scale,
-            },
-        )
+        if encoding == "frequency":
+            self.encoder, encoded_dim = get_encoder(encoding, multires=10)
+        elif encoding == "hashgrid":
+            self.encoder, encoded_dim = get_encoder(encoding)
 
         self.sigma_net = tcnn.Network(
-            n_input_dims=32,
+            n_input_dims=encoded_dim,
             n_output_dims=1 + self.geo_feat_dim,
             network_config={
-                "otype": "FullyFusedMLP",
+                "otype": "CutlassMLP",
                 "activation": "ReLU",
                 "output_activation": "None",
                 "n_neurons": hidden_dim,
@@ -72,7 +65,7 @@ class NeRFNetwork(NeRFRenderer):
             n_input_dims=self.in_dim_color,
             n_output_dims=3,
             network_config={
-                "otype": "FullyFusedMLP",
+                "otype": "CutlassMLP",
                 "activation": "ReLU",
                 "output_activation": "None",
                 "n_neurons": hidden_dim_color,
@@ -85,13 +78,12 @@ class NeRFNetwork(NeRFRenderer):
         # x: [N, 3], in [-bound, bound]
         # d: [N, 3], nomalized in [-1, 1]
 
-
         # sigma
-        x = (x + self.bound) / (2 * self.bound) # to [0, 1]
+        x = self._preprocess(x)
         x = self.encoder(x)
         h = self.sigma_net(x)
 
-        #sigma = F.relu(h[..., 0])
+        # sigma = F.relu(h[..., 0], inplace=True)
         sigma = trunc_exp(h[..., 0])
         geo_feat = h[..., 1:]
 
@@ -111,11 +103,11 @@ class NeRFNetwork(NeRFRenderer):
     def density(self, x):
         # x: [N, 3], in [-bound, bound]
 
-        x = (x + self.bound) / (2 * self.bound) # to [0, 1]
+        x = self._preprocess(x)
         x = self.encoder(x)
         h = self.sigma_net(x)
 
-        #sigma = F.relu(h[..., 0])
+        # sigma = F.relu(h[..., 0])
         sigma = trunc_exp(h[..., 0])
         geo_feat = h[..., 1:]
 
@@ -129,7 +121,7 @@ class NeRFNetwork(NeRFRenderer):
         # x: [N, 3] in [-bound, bound]
         # mask: [N,], bool, indicates where we actually needs to compute rgb.
 
-        x = (x + self.bound) / (2 * self.bound) # to [0, 1]
+        x = self._preprocess(x)
 
         if mask is not None:
             rgbs = torch.zeros(mask.shape[0], 3, dtype=x.dtype, device=x.device) # [N, 3]
@@ -171,3 +163,7 @@ class NeRFNetwork(NeRFRenderer):
             params.append({'params': self.bg_net.parameters(), 'lr': lr})
 
         return params
+
+    def _preprocess(self, x):
+        return (x + self.bound) / (2 * self.bound)# to [0, 1]
+
