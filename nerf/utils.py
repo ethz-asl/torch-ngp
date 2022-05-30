@@ -30,6 +30,11 @@ from torch_ema import ExponentialMovingAverage
 
 from packaging import version as pver
 
+SEMANTIC_COLORS = np.array([
+    [52, 137, 235],
+    [235, 229, 52]
+], dtype=np.uint8)
+
 def custom_meshgrid(*args):
     # ref: https://pytorch.org/docs/stable/generated/torch.meshgrid.html?highlight=meshgrid#torch.meshgrid
     if pver.parse(torch.__version__) < pver.parse('1.10'):
@@ -485,8 +490,11 @@ class Trainer(object):
 
         pred_rgb = outputs['image'].reshape(-1, H, W, 3)
         pred_depth = outputs['depth'].reshape(-1, H, W)
+        pred_semantic = outputs['semantic']
+        _, _, C = pred_semantic.shape
+        pred_semantic = pred_semantic.reshape(-1, H, W, C)
 
-        return pred_rgb, pred_depth
+        return pred_rgb, pred_depth, pred_semantic
 
 
     def save_mesh(self, save_path=None, resolution=256, threshold=10):
@@ -568,7 +576,8 @@ class Trainer(object):
             for i, data in enumerate(loader):
 
                 with torch.cuda.amp.autocast(enabled=self.fp16):
-                    preds, preds_depth = self.test_step(data)
+                    preds, preds_depth, preds_semantic = self.test_step(data)
+                import ipdb; ipdb.set_trace()
 
                 path = os.path.join(save_path, f'rgb_{i:04d}.png')
                 path_depth = os.path.join(save_path, f'depth_{i:04d}.png')
@@ -580,6 +589,8 @@ class Trainer(object):
                 preds_depth = preds_depth / np.max(np.max(preds_depth, axis=-2), axis=-2)[:, None, None, :]
                 cv2.imwrite(path, cv2.cvtColor((preds[0].detach().cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
                 cv2.imwrite(path_depth, (preds_depth[0].detach().cpu().numpy() * 255).astype(np.uint8))
+
+
 
                 pbar.update(1)
 
@@ -815,7 +826,7 @@ class Trainer(object):
                 self.local_step += 1
 
                 with torch.cuda.amp.autocast(enabled=self.fp16):
-                    preds, preds_depth, truths, loss = self.eval_step(data)
+                    preds, preds_depth, preds_semantic, truths, loss = self.eval_step(data)
 
                 # all_gather/reduce the statistics (NCCL only support all_*)
                 if self.world_size > 1:
@@ -846,7 +857,7 @@ class Trainer(object):
                     # save image
                     save_path = os.path.join(self.workspace, 'validation', f'rgb_{self.name}_{self.local_step:04d}.png')
                     save_path_depth = os.path.join(self.workspace, 'validation', f'depth_{self.name}_{self.local_step:04d}.png')
-                    #save_path_gt = os.path.join(self.workspace, 'validation', f'{self.name}_{self.epoch:04d}_{self.local_step:04d}_gt.png')
+                    save_path_semantic = os.path.join(self.workspace, 'validation', f"sem_{self.name}_{self.local_step:04d}.png")
 
                     normalized_depth = 1.0 - torch.clip(preds_depth, 0.0, 10.0) / 10.0
 
@@ -858,6 +869,9 @@ class Trainer(object):
 
                     cv2.imwrite(save_path_depth, cv2.cvtColor((cm.inferno(normalized_depth[0].detach().cpu().numpy()) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
                     #cv2.imwrite(save_path_gt, cv2.cvtColor((truths[0].detach().cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
+
+                    semantic_map = SEMANTIC_COLORS[preds_semantic[0].argmax(dim=-1).detach().cpu().numpy()]
+                    cv2.imwrite(save_path_semantic, cv2.cvtColor(semantic_map, cv2.COLOR_RGB2BGR))
 
                     pbar.set_description(f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f})")
                     pbar.update(1)

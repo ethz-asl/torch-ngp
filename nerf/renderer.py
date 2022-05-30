@@ -225,11 +225,14 @@ class NeRFRenderer(nn.Module):
         weights = alphas * torch.cumprod(alphas_shifted, dim=-1)[..., :-1] # [N, T+t]
 
         dirs = rays_d.view(-1, 1, 3).expand_as(xyzs)
-        for k, v in density_outputs.items():
-            density_outputs[k] = v.view(-1, v.shape[-1])
 
         mask = weights > 1e-4 # hard coded
-        rgbs = self.color(xyzs.reshape(-1, 3), dirs.reshape(-1, 3), mask=mask.reshape(-1), **density_outputs)
+        geometric_features = density_outputs['geo_feat']
+        sigma = density_outputs['sigma'].view(-1, 1)
+        rgbs = self.color(xyzs.reshape(-1, 3), dirs.reshape(-1, 3),
+                mask=mask.reshape(-1),
+                geo_feat=geometric_features.view(-1, geometric_features.shape[-1]),
+                sigma=sigma)
         rgbs = rgbs.view(N, -1, 3) # [N, T+t, 3]
 
         #print(xyzs.shape, 'valid_rgb:', mask.sum().item())
@@ -246,7 +249,8 @@ class NeRFRenderer(nn.Module):
         # depth = torch.sum(weights * ori_z_vals, dim=-1)
 
         # calculate color
-        image = torch.sum(weights.unsqueeze(-1) * rgbs, dim=-2) # [N, 3], in [0, 1]
+        weights = weights.unsqueeze(-1)
+        image = torch.sum(weights * rgbs, dim=-2) # [N, 3], in [0, 1]
 
         # mix background color
         if self.bg_radius > 0:
@@ -261,6 +265,12 @@ class NeRFRenderer(nn.Module):
         image = image.view(*prefix, 3)
         depth = depth.view(*prefix)
 
+        semantic = self.semantic(
+                geometric_features.view(-1, geometric_features.shape[-1]),
+                sigma
+                ).view((geometric_features.shape[0], geometric_features.shape[1], self.semantic_classes))
+        semantic = (weights * semantic).sum(dim=-2)
+
         # tmp: reg loss in mip-nerf 360
         # z_vals_shifted = torch.cat([z_vals[..., 1:], sample_dist * torch.ones_like(z_vals[..., :1])], dim=-1)
         # mid_zs = (z_vals + z_vals_shifted) / 2 # [N, T]
@@ -269,8 +279,8 @@ class NeRFRenderer(nn.Module):
         return {
             'depth': depth,
             'image': image,
+            'semantic': semantic
         }
-
 
     def run_cuda(self, rays_o, rays_d, dt_gamma=0, bg_color=None, perturb=False, force_all_rays=False, max_steps=1024, **kwargs):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
@@ -576,20 +586,23 @@ class NeRFRenderer(nn.Module):
         if staged and not self.cuda_ray:
             depth = torch.empty((B, N), device=device)
             image = torch.empty((B, N, 3), device=device)
+            semantic = torch.empty((B, N, self.semantic_classes), device=device)
 
             for b in range(B):
                 head = 0
                 while head < N:
                     tail = min(head + max_ray_batch, N)
                     results_ = _run(rays_o[b:b+1, head:tail], rays_d[b:b+1, head:tail], **kwargs)
-                    depth[b:b+1, head:tail] = results_['depth']
                     image[b:b+1, head:tail] = results_['image']
+                    depth[b:b+1, head:tail] = results_['depth']
+                    semantic[b:b+1, head:tail, :] = results_['semantic']
+
                     head += max_ray_batch
 
             results = {}
             results['depth'] = depth
             results['image'] = image
-
+            results['semantic'] = semantic
         else:
             results = _run(rays_o, rays_d, **kwargs)
 

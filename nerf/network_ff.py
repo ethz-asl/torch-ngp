@@ -18,6 +18,8 @@ class NeRFNetwork(NeRFRenderer):
                  geo_feat_dim=15,
                  num_layers_color=3,
                  hidden_dim_color=64,
+                 hidden_dim_semantic=64,
+                 semantic_classes=2,
                  bound=1,
                  **kwargs
                  ):
@@ -40,14 +42,23 @@ class NeRFNetwork(NeRFRenderer):
         # color network
         self.num_layers_color = num_layers_color
         self.hidden_dim_color = hidden_dim_color
-        self.encoder_dir, self.in_dim_color = get_encoder(encoding_dir)
-        self.in_dim_color += self.geo_feat_dim + 1 # a manual fixing to make it 32, as done in nerf_network.h#178
+        self.encoder_dir, self.color_features = get_encoder(encoding_dir)
+        self.color_features += self.geo_feat_dim + 1 # a manual fixing to make it 32, as done in nerf_network.h#178
 
         self.color_net = FFMLP(
-            input_dim=self.in_dim_color,
+            input_dim=self.color_features,
             output_dim=3,
             hidden_dim=self.hidden_dim_color,
             num_layers=self.num_layers_color,
+        )
+
+        self.hidden_dim_semantic = hidden_dim_semantic
+        self.semantic_classes = semantic_classes
+        self.semantic_net = FFMLP(
+            input_dim=self.geo_feat_dim + 1,
+            output_dim=semantic_classes,
+            hidden_dim=self.hidden_dim_semantic,
+            num_layers=self.num_layers
         )
 
     def forward(self, x, d):
@@ -60,7 +71,7 @@ class NeRFNetwork(NeRFRenderer):
 
         #sigma = F.relu(h[..., 0])
         sigma = trunc_exp(h[..., 0])
-        geo_feat = h[..., 1:]
+        geo_feat = F.relu(h[..., 1:])
 
         # color
         d = self.encoder_dir(d)
@@ -73,7 +84,10 @@ class NeRFNetwork(NeRFRenderer):
         # sigmoid activation for rgb
         rgb = torch.sigmoid(h)
 
-        return sigma, rgb
+        semantic = self.semantic_net(geo_feat)
+        semantic = F.softmax(semantic, dim=-1)
+
+        return sigma, rgb, semantic
 
     def density(self, x):
         # x: [N, 3], in [-bound, bound]
@@ -83,7 +97,7 @@ class NeRFNetwork(NeRFRenderer):
 
         #sigma = F.relu(h[..., 0])
         sigma = trunc_exp(h[..., 0])
-        geo_feat = h[..., 1:]
+        geo_feat = F.relu(h[..., 1:])
 
         return {
             'sigma': sigma,
@@ -142,10 +156,16 @@ class NeRFNetwork(NeRFRenderer):
             {'params': self.encoder.parameters(), 'lr': lr},
             {'params': self.sigma_net.parameters(), 'lr': lr},
             {'params': self.encoder_dir.parameters(), 'lr': lr},
-            {'params': self.color_net.parameters(), 'lr': lr}, 
+            {'params': self.color_net.parameters(), 'lr': lr},
         ]
         if self.bg_radius > 0:
             params.append({'params': self.encoder_bg.parameters(), 'lr': lr})
             params.append({'params': self.bg_net.parameters(), 'lr': lr})
-        
+
         return params
+
+    def semantic(self, features, sigma):
+        zeros = torch.zeros_like(sigma)
+        features = torch.cat([features, zeros], dim=-1)
+        return self.semantic_net(features)
+
