@@ -577,7 +577,6 @@ class Trainer(object):
 
                 with torch.cuda.amp.autocast(enabled=self.fp16):
                     preds, preds_depth, preds_semantic = self.test_step(data)
-                import ipdb; ipdb.set_trace()
 
                 path = os.path.join(save_path, f'rgb_{i:04d}.png')
                 path_depth = os.path.join(save_path, f'depth_{i:04d}.png')

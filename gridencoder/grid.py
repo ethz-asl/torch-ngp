@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
-from torch.cuda.amp import custom_bwd, custom_fwd 
+from torch.cuda.amp import custom_bwd, custom_fwd
 
 try:
     import _gridencoder as _backend
@@ -35,8 +35,8 @@ class _grid_encode(Function):
 
         # manually handle autocast (only use half precision embeddings, inputs must be float for enough precision)
         # if C % 2 != 0, force float, since half for atomicAdd is very slow.
-        if torch.is_autocast_enabled() and C % 2 == 0:
-            embeddings = embeddings.to(torch.half)
+        # if torch.is_autocast_enabled() and C % 2 == 0:
+        #     embeddings = embeddings.to(torch.half)
 
         # L first, optimize cache for cuda kernel, but needs an extra permute later
         outputs = torch.empty(L, B, C, device=inputs.device, dtype=embeddings.dtype)
@@ -56,7 +56,7 @@ class _grid_encode(Function):
         ctx.calc_grad_inputs = calc_grad_inputs
 
         return outputs
-    
+
     @staticmethod
     #@once_differentiable
     @custom_bwd
@@ -122,27 +122,27 @@ class GridEncoder(nn.Module):
         offsets.append(offset)
         offsets = torch.from_numpy(np.array(offsets, dtype=np.int32))
         self.register_buffer('offsets', offsets)
-        
+
         self.n_params = offsets[-1] * level_dim
 
         # parameters
         self.embeddings = nn.Parameter(torch.empty(offset, level_dim))
 
         self.reset_parameters()
-    
+
     def reset_parameters(self):
         std = 1e-4
         self.embeddings.data.uniform_(-std, std)
 
     def __repr__(self):
         return f"GridEncoder: input_dim={self.input_dim} num_levels={self.num_levels} level_dim={self.level_dim} resolution={self.base_resolution} -> {int(round(self.base_resolution * self.per_level_scale ** (self.num_levels - 1)))} per_level_scale={self.per_level_scale:.4f} params={tuple(self.embeddings.shape)} gridtype={self.gridtype}"
-    
+
     def forward(self, inputs, bound=1):
         # inputs: [..., input_dim], normalized real world positions in [-bound, bound]
         # return: [..., num_levels * level_dim]
 
         inputs = (inputs + bound) / (2 * bound) # map to [0, 1]
-        
+
         #print('inputs', inputs.shape, inputs.dtype, inputs.min().item(), inputs.max().item())
 
         prefix_shape = list(inputs.shape[:-1])
