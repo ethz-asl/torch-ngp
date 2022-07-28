@@ -724,7 +724,7 @@ class NeRFRenderer(nn.Module):
             depth = torch.empty((B, N), device=device)
             image = torch.empty((B, N, 3), device=device)
             semantic = torch.empty((B, N, self.semantic_classes), device=device)
-            semantic_features = torch.empty((B, N, 64), device=device)
+            semantic_features = torch.empty((B, N, 128), device=device)
 
             for b in range(B):
                 head = 0
