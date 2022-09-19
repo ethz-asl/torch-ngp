@@ -29,8 +29,8 @@ from torch_ema import ExponentialMovingAverage
 
 from packaging import version as pver
 
-colors = (cm.tab20c(np.linspace(0, 1, 20)) * 255.0)[:, :3].astype(np.uint8)
-SEMANTIC_COLORS = np.concatenate([colors, colors], axis=0)
+colors = (cm.tab10(np.linspace(0, 1, 10)) * 255.0)[:, :3].astype(np.uint8)
+SEMANTIC_COLORS = np.concatenate([colors, colors, colors, colors], axis=0)
 
 
 def custom_meshgrid(*args):
