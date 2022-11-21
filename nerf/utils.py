@@ -5,6 +5,7 @@ import math
 import random
 import warnings
 import tensorboardX
+import wandb
 
 import numpy as np
 
@@ -250,6 +251,7 @@ class Trainer(object):
             name,  # name of this experiment
             opt,  # extra conf
             model,  # network
+            supix_epoch, # at which epoch introduce within-superpixels entropy minimization
             criterion=None,  # loss function, if None, assume inline implementation in train_step
             optimizer=None,  # optimizer
             ema_decay=None,  # if use EMA, set the decay
@@ -274,6 +276,7 @@ class Trainer(object):
         self.name = name
         self.opt = opt
         self.mute = mute
+        self.supix_epoch = supix_epoch
         self.metrics = metrics
         self.local_rank = local_rank
         self.world_size = world_size
@@ -839,8 +842,12 @@ class Trainer(object):
 
             self.optimizer.zero_grad()
 
-            with torch.cuda.amp.autocast(enabled=self.fp16):
-                preds, truths, loss = self.train_step(data)
+            if self.epoch > self.supix_epoch:
+                with torch.cuda.amp.autocast(enabled=self.fp16):
+                    preds, truths, loss, rgb_loss, depth_loss, sem_loss, sup_loss = self.train_step(data)
+            else:
+                with torch.cuda.amp.autocast(enabled=self.fp16):
+                    preds, truths, loss, rgb_loss, depth_loss, sem_loss = self.train_step(data)
 
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
@@ -851,6 +858,17 @@ class Trainer(object):
 
             loss_val = loss.item()
             total_loss += loss_val
+
+            # uncomment to plot with weights and biases
+            if self.epoch > self.supix_epoch:
+                wandb.log({"loss": loss_val,
+                "depth": depth_loss,
+               "rgb": rgb_loss,
+                "superpixel": sup_loss})
+            else:
+                wandb.log({"loss": loss_val,
+                "rgb": rgb_loss,
+                "depth": depth_loss})
 
             if self.local_rank == 0:
                 if self.report_metric_at_train:
