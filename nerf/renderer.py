@@ -294,6 +294,7 @@ class NeRFRenderer(nn.Module):
         # calculate depth
         ori_z_vals = (z_vals - nears) / (fars - nears)
         depth = (weights * z_vals).sum(dim=-1)
+        depth_variance = (weights * (depth[..., None] - z_vals)**2).sum(dim=-1)
 
         # depth = (weights * ori_z_vals).sum(dim=-1)
         # ori_z_vals = ((z_vals - nears) / (fars - nears)).clamp(0, 1)
@@ -335,6 +336,7 @@ class NeRFRenderer(nn.Module):
 
         return {
             'depth': depth,
+            'depth_variance': depth_variance,
             'image': image,
             'semantic': semantic,
             'semantic_features': semantic_features
@@ -722,6 +724,7 @@ class NeRFRenderer(nn.Module):
         # never stage when cuda_ray
         if staged and not self.cuda_ray:
             depth = torch.empty((B, N), device=device)
+            depth_variance = torch.empty((B, N), device=device)
             image = torch.empty((B, N, 3), device=device)
             semantic = torch.empty((B, N, self.semantic_classes), device=device)
             semantic_features = torch.empty((B, N, self.hidden_dim_semantic),
@@ -735,6 +738,8 @@ class NeRFRenderer(nn.Module):
                                     rays_d[b:b + 1, head:tail], **kwargs)
                     image[b:b + 1, head:tail] = results_['image']
                     depth[b:b + 1, head:tail] = results_['depth']
+                    depth_variance[b:b + 1,
+                                   head:tail] = results_['depth_variance']
                     semantic[b:b + 1, head:tail, :] = results_['semantic']
                     semantic_features[
                         b:b + 1, head:tail, :] = results_['semantic_features']
@@ -743,6 +748,7 @@ class NeRFRenderer(nn.Module):
 
             results = {}
             results['depth'] = depth
+            results['depth_variance'] = depth_variance
             results['image'] = image
             results['semantic'] = semantic
             results['semantic_features'] = semantic_features
