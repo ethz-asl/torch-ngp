@@ -129,7 +129,6 @@ class _near_far_from_aabb(Function):
                                         aabb_far / rays_d_sq)
         dL_drays_d = dL_dnears_r * dtnear_dray_d + dL_dfars_r * dtfar_dray_d
 
-        print(dL_drays_o.norm(), dL_drays_d.norm())
         return dL_drays_o, dL_drays_d, None, None
 
 

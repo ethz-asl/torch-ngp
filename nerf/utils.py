@@ -304,19 +304,6 @@ class Trainer(object):
             criterion.to(self.device)
         self.criterion = criterion
 
-        if optimizer is None:
-            self.optimizer = optim.Adam(self.model.parameters(),
-                                        lr=0.001,
-                                        weight_decay=5e-4)  # naive adam
-        else:
-            self.optimizer = optimizer(self.model)
-
-        if lr_scheduler is None:
-            self.lr_scheduler = optim.lr_scheduler.LambdaLR(
-                self.optimizer, lr_lambda=lambda epoch: 1)  # fake scheduler
-        else:
-            self.lr_scheduler = lr_scheduler(self.optimizer)
-
         if ema_decay is not None:
             self.ema = ExponentialMovingAverage(self.model.parameters(),
                                                 decay=ema_decay)
@@ -358,6 +345,15 @@ class Trainer(object):
         )
         self.log(
             f'[INFO] #parameters: {sum([p.numel() for p in model.parameters() if p.requires_grad])}'
+        )
+
+        # Temporary refernces to the passed class variables. These get configured in self.configure_optimizers()
+        self.optimizer_ = optimizer
+        self.lr_scheduler_ = lr_scheduler
+        self.configure_optimizers()
+
+        self.log(
+            f"[INFO] Optimizers: {', '.join([f'opt{i}: {str(opt)}' for i, opt in enumerate(self.optimizers)])}"
         )
 
         if self.workspace is not None:
@@ -587,9 +583,26 @@ class Trainer(object):
 
         self.log(f"==> Finished saving mesh.")
 
-    ### ------------------------------
+    ### ----- TRAINING -----
+
+    def configure_optimizers(self):
+        if self.optimizer_ is None:
+            self.optimizers = [
+                optim.Adam(self.model.parameters(), lr=0.001, weight_decay=5e-4)
+            ]  # naive adam
+        else:
+            self.optimizers = [self.optimizer_(self.model)]
+
+        if self.lr_scheduler_ is None:
+            self.lr_schedulers = [
+                optim.lr_scheduler.LambdaLR(self.optimizers[0],
+                                            lr_lambda=lambda epoch: 1)
+            ]  # fake scheduler
+        else:
+            self.lr_schedulers = [self.lr_scheduler_(self.optimizers[0])]
 
     def train(self, train_loader, valid_loader, max_epochs):
+
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer = tensorboardX.SummaryWriter(
                 os.path.join(self.workspace, "run", self.name))
@@ -703,17 +716,22 @@ class Trainer(object):
 
             self.global_step += 1
 
-            self.optimizer.zero_grad()
+            # reset all optimizers
+            for opt in self.optimizers:
+                opt.zero_grad()
 
             with torch.cuda.amp.autocast(enabled=self.fp16):
                 preds, truths, loss = self.train_step(data)
 
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            for i, opt in enumerate(self.optimizers):
+                is_last = i == len(self.optimizers) - 1
+                self.scaler.scale(loss).backward(retain_graph=not is_last)
+                self.scaler.step(opt)
+                self.scaler.update()
 
             if self.scheduler_update_every_step:
-                self.lr_scheduler.step()
+                for lr_sched in self.lr_schedulers:
+                    lr_sched.step()
 
             total_loss += loss.detach()
 
@@ -723,15 +741,16 @@ class Trainer(object):
         average_loss = total_loss.item() / step
 
         if not self.scheduler_update_every_step:
-            if isinstance(self.lr_scheduler,
-                          torch.optim.lr_scheduler.ReduceLROnPlateau):
-                self.lr_scheduler.step(average_loss)
-            else:
-                self.lr_scheduler.step()
+            for lr_sched in self.lr_schedulers:
+                if isinstance(lr_sched,
+                              torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    lr_sched.step(average_loss)
+                else:
+                    lr_sched.step()
 
         outputs = {
             'loss': average_loss,
-            'lr': self.optimizer.param_groups[0]['lr'],
+            'lr': self.optimizer[0].param_groups[0]['lr'],
         }
 
         return outputs
@@ -803,9 +822,10 @@ class Trainer(object):
         return outputs
 
     def train_one_epoch(self, loader):
-        self.log(
-            f"==> Start Training Epoch {self.epoch}, lr={self.optimizer.param_groups[0]['lr']:.6f} ..."
-        )
+        self.log(f"==> Start Training Epoch {self.epoch}, " + ", ".join([
+            f"opt{i}: lr={opt.param_groups[0]['lr']:.6f}"
+            for i, opt in enumerate(self.optimizers)
+        ]))
 
         total_loss = 0
         if self.local_rank == 0 and self.report_metric_at_train:
@@ -837,17 +857,21 @@ class Trainer(object):
             self.local_step += 1
             self.global_step += 1
 
-            self.optimizer.zero_grad()
+            for opt in self.optimizers:
+                opt.zero_grad()
 
             with torch.cuda.amp.autocast(enabled=self.fp16):
                 preds, truths, loss = self.train_step(data)
 
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            for i, opt in enumerate(self.optimizers):
+                is_last = i == len(self.optimizers) - 1
+                self.scaler.scale(loss).backward(retain_graph=not is_last)
+                self.scaler.step(opt)
+                self.scaler.update()
 
             if self.scheduler_update_every_step:
-                self.lr_scheduler.step()
+                for lr_sched in self.lr_schedulers:
+                    lr_sched.step()
 
             loss_val = loss.item()
             total_loss += loss_val
@@ -860,14 +884,18 @@ class Trainer(object):
                 if self.use_tensorboardX:
                     self.writer.add_scalar("train/loss", loss_val,
                                            self.global_step)
-                    self.writer.add_scalar("train/lr",
-                                           self.optimizer.param_groups[0]['lr'],
-                                           self.global_step)
+                    for i, opt in enumerate(self.optimizers):
+                        self.writer.add_scalar(f"train/opt{i}/lr",
+                                               opt.param_groups[0]['lr'],
+                                               self.global_step)
 
                 if self.scheduler_update_every_step:
                     pbar.set_description(
-                        f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f}), lr={self.optimizer.param_groups[0]['lr']:.6f}"
-                    )
+                        f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f}), "
+                        + ", ".join([
+                            f"opt{i}: lr={opt.param_groups[0]['lr']:.6f}"
+                            for i, opt in enumerate(self.optimizers)
+                        ]))
                 else:
                     pbar.set_description(
                         f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f})"
@@ -890,11 +918,12 @@ class Trainer(object):
                     metric.clear()
 
         if not self.scheduler_update_every_step:
-            if isinstance(self.lr_scheduler,
-                          torch.optim.lr_scheduler.ReduceLROnPlateau):
-                self.lr_scheduler.step(average_loss)
-            else:
-                self.lr_scheduler.step()
+            for lr_sched in self.lr_schedulers:
+                if isinstance(lr_sched,
+                              torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    lr_sched.step(average_loss)
+                else:
+                    lr_sched.step()
 
         self.log(f"==> Finished Epoch {self.epoch}.")
 
@@ -1057,8 +1086,11 @@ class Trainer(object):
             state['mean_density'] = self.model.mean_density
 
         if full:
-            state['optimizer'] = self.optimizer.state_dict()
-            state['lr_scheduler'] = self.lr_scheduler.state_dict()
+            for i, opt in self.optimizers:
+                state[f"opt{i}"] = opt.state_dict()
+            for i, lr_sched in enumerate(self.lr_schedulers):
+                state[f'lr_sched{i}'] = lr_sched.state_dict()
+
             state['scaler'] = self.scaler.state_dict()
             if self.ema is not None:
                 state['ema'] = self.ema.state_dict()
@@ -1150,24 +1182,22 @@ class Trainer(object):
             f"[INFO] load at epoch {self.epoch}, global step {self.global_step}"
         )
 
-        if self.optimizer and 'optimizer' in checkpoint_dict:
-            try:
-                self.optimizer.load_state_dict(checkpoint_dict['optimizer'])
-                self.log("[INFO] loaded optimizer.")
-            except:
-                self.log("[WARN] Failed to load optimizer.")
+        def load_modules(modules, starts_with):
+            for key in checkpoint_dict.keys():
+                if not key.startswith(starts_with):
+                    continue
+                idx = int(key[len(starts_with):])  # skip "opt" in opt_key
+                if idx >= len(modules):
+                    self.log(
+                        f"[WARN] {key} found in checkpoint but not defined for the trainer"
+                    )
+                    continue
+                try:
+                    modules[idx].load_state_dict(checkpoint_dict[key])
+                    self.log(f"[INFO] loaded {key}.")
+                except:
+                    self.log(f"[WARN] Failed to load {key}.")
+            return modules
 
-        if self.lr_scheduler and 'lr_scheduler' in checkpoint_dict:
-            try:
-                self.lr_scheduler.load_state_dict(
-                    checkpoint_dict['lr_scheduler'])
-                self.log("[INFO] loaded scheduler.")
-            except:
-                self.log("[WARN] Failed to load scheduler.")
-
-        if self.scaler and 'scaler' in checkpoint_dict:
-            try:
-                self.scaler.load_state_dict(checkpoint_dict['scaler'])
-                self.log("[INFO] loaded scaler.")
-            except:
-                self.log("[WARN] Failed to load scaler.")
+        load_modules(self.optimizers, starts_with="opt")
+        load_modules(self.lr_schedulers, starts_with="lr_sched")
