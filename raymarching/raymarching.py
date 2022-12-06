@@ -64,16 +64,18 @@ class _near_far_from_aabb(Function):
                       N: int,
                       dtype=torch.float32,
                       device="cuda"):
-        near_dim = indices % 3
+        dim = indices % 3
         invalid_near = indices == 255
         indicator = torch.zeros(size=(N, 3),
                                 dtype=dtype,
                                 device=device,
                                 requires_grad=False)  # [N, 3]
-        batch_idx = torch.arange(N)
+        batch_idx = torch.arange(N, dtype=torch.int64)
         # set valid indices to 1., invalid ones to 0.
-        indicator[batch_idx, near_dim] = 1.
-        indicator[invalid_near, near_dim[invalid_near]] = 0.
+        indicator[batch_idx, dim] = 1.
+        if invalid_near.any():
+            print(f"num invalid {invalid_near.sum()}")
+        indicator[invalid_near, dim[invalid_near]] = 0.
         return indicator
 
     @staticmethod
@@ -117,9 +119,10 @@ class _near_far_from_aabb(Function):
         dL_dfars_r = rearrange(dL_dfars, "b -> b 1")
 
         # compute dL_drays_o
-        dtnear_dray_o = indicator_near * -1. / rays_d
-        dtfar_dray_o = indicator_far * -1. / rays_d
+        dtnear_dray_o = -indicator_near / rays_d
+        dtfar_dray_o = -indicator_far / rays_d
         dL_drays_o = dL_dnears_r * dtnear_dray_o + dL_dfars_r * dtfar_dray_o
+
 
         # compute dL_drays_d
         rays_d_sq = rays_d * rays_d
@@ -127,6 +130,7 @@ class _near_far_from_aabb(Function):
                                           aabb_near / rays_d_sq)
         dtfar_dray_d = indicator_far * (rays_o / rays_d_sq -
                                         aabb_far / rays_d_sq)
+
         dL_drays_d = dL_dnears_r * dtnear_dray_d + dL_dfars_r * dtfar_dray_d
 
         return dL_drays_o, dL_drays_d, None, None
@@ -301,7 +305,6 @@ class _march_rays_train(Function):
             rays: int32, [N, 3], all rays' (index, point_offset, point_count), e.g., xyzs[rays[i, 1]:rays[i, 2]] --> points belonging to rays[i, 0]
         '''
 
-        print("march_rays_train_forward")
         if not rays_o.is_cuda:
             rays_o = rays_o.cuda()
         if not rays_d.is_cuda:
@@ -327,8 +330,8 @@ class _march_rays_train(Function):
         dirs = torch.zeros(M, 3, dtype=rays_o.dtype, device=rays_o.device)
         deltas = torch.zeros(M, 2, dtype=rays_o.dtype, device=rays_o.device)
         ts = torch.zeros(M, 1, dtype=rays_o.dtype, device=rays_o.device)
-        rays = torch.empty(N, 3, dtype=torch.int32,
-                           device=rays_o.device)  # id, offset, num_steps
+        # [id, offset, num_steps]
+        rays = torch.empty(N, 3, dtype=torch.int32, device=rays_o.device)  
 
         if step_counter is None:
             step_counter = torch.zeros(
@@ -340,8 +343,6 @@ class _march_rays_train(Function):
             H, M, nears, fars, xyzs, dirs, deltas, ts, rays, step_counter,
             perturb)  # m is the actually used points number
 
-        ctx.save_for_backward(rays, ts)
-
         # only used at the first (few) epochs.
         if force_all_rays or mean_count <= 0:
             m = step_counter[0].item()  # D2H copy
@@ -350,24 +351,28 @@ class _march_rays_train(Function):
             xyzs = xyzs[:m]
             dirs = dirs[:m]
             deltas = deltas[:m]
+            ts = ts[:m]
 
             torch.cuda.empty_cache()
+
+        ctx.save_for_backward(rays, ts)
 
         return xyzs, dirs, deltas, rays
 
     @staticmethod
     @custom_bwd
     def backward(ctx, dL_dxyzs, dL_ddirs, dL_ddeltas, dL_drays):
-        print("march_rays_train backward")
-        rays, ts = ctx.saved_tensors
+        ray_segments, ts = ctx.saved_tensors
 
         # segments for each ray are (start_0, ..., start_n, start_n + offset_n)
-        segments = torch.cat([rays[:, 1], rays[-1:, 1] + rays[-1:2]])
+        start_i = ray_segments[:, 1].to(torch.int64)
+        offset_n = (ray_segments[-1, 1] + ray_segments[-1, 2]).reshape(-1).to(torch.int64)
+        segments = torch.cat([start_i, offset_n])
         # sum over the corresponding segments
         dL_drays_o = segment_csr(dL_dxyzs, segments)
 
         dL_drays_d = segment_csr(
-            dL_dxyzs * rearrange(ts, "n -> n 1") + dL_ddirs, segments)
+            dL_dxyzs * ts + dL_ddirs, segments)
 
         # outout are derivatives of loss w.r.t the parameters of the forward pass
         return (
@@ -430,7 +435,6 @@ class _composite_rays_train(Function):
     @staticmethod
     @custom_bwd
     def backward(ctx, grad_weights_sum, grad_depth, grad_image):
-        print("composite rays train backward")
         # NOTE: grad_depth is not used now! It won't be propagated to sigmas.
 
         grad_weights_sum = grad_weights_sum.contiguous()

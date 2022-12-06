@@ -503,7 +503,7 @@ __global__ void kernel_march_rays_train(
             t += dt;
             deltas[0] = dt;
             deltas[1] = t - last_t; // used to calc depth
-            (*ts) = t;
+            ts[0] = t;
             last_t = t;
             xyzs += 3;
             dirs += 3;

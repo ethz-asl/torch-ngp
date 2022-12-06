@@ -355,6 +355,11 @@ class Trainer(object):
         self.log(
             f"[INFO] Optimizers: {', '.join([f'opt{i}: {str(opt)}' for i, opt in enumerate(self.optimizers)])}"
         )
+        group_names = lambda groups: ", ".join(
+            [group["name"] for group in groups])
+        self.log(
+            f"[INFO] Optimizing over: {', '.join([f'opt{i}: {group_names(opt.param_groups)}' for i, opt in enumerate(self.optimizers)])}"
+        )
 
         if self.workspace is not None:
             if self.use_checkpoint == "scratch":
@@ -588,7 +593,12 @@ class Trainer(object):
     def configure_optimizers(self):
         if self.optimizer_ is None:
             self.optimizers = [
-                optim.Adam(self.model.parameters(), lr=0.001, weight_decay=5e-4)
+                optim.Adam([{
+                    "name": "model",
+                    "params": self.model.parameters()
+                }],
+                           lr=0.001,
+                           weight_decay=5e-4)
             ]  # naive adam
         else:
             self.optimizers = [self.optimizer_(self.model)]
@@ -865,7 +875,7 @@ class Trainer(object):
 
             for i, opt in enumerate(self.optimizers):
                 is_last = i == len(self.optimizers) - 1
-                self.scaler.scale(loss).backward(retain_graph=not is_last)
+                self.scaler.scale(loss).backward()
                 self.scaler.step(opt)
                 self.scaler.update()
 
@@ -1151,6 +1161,7 @@ class Trainer(object):
         checkpoint_dict = torch.load(checkpoint, map_location=self.device)
 
         if 'model' not in checkpoint_dict:
+            print(checkpoint_dict)
             self.model.load_state_dict(checkpoint_dict)
             self.log("[INFO] loaded model.")
             return

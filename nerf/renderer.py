@@ -195,7 +195,7 @@ class NeRFRenderer(nn.Module):
         xyzs = rays_o.unsqueeze(-2) + rays_d.unsqueeze(-2) * z_vals.unsqueeze(
             -1)  # [N, 1, 3] * [N, T, 1] -> [N, T, 3]
         # xyzs = torch.clip(xyzs, NEAR, FAR)
-        # xyzs = torch.min(torch.max(xyzs, aabb[:3]), aabb[3:]) # a manual clip.
+        # xyzs = torch.min(torch.max(xyzs, aabb[:3]), aabb[3:])  # a manual clip.
 
         #plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
 
@@ -237,7 +237,8 @@ class NeRFRenderer(nn.Module):
                     -2) + rays_d.unsqueeze(-2) * new_z_vals.unsqueeze(
                         -1)  # [N, 1, 3] * [N, t, 1] -> [N, t, 3]
                 # new_xyzs = torch.clip(new_xyzs, NEAR, FAR)
-                # new_xyzs = torch.min(torch.max(new_xyzs, aabb[:3]), aabb[3:]) # a manual clip.
+                # new_xyzs = torch.min(torch.max(new_xyzs, aabb[:3]),
+                #                      aabb[3:])  # a manual clip.
 
             # only forward new points to save computation
             new_density_outputs = self.density(new_xyzs.reshape(-1, 3))
