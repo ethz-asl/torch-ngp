@@ -207,6 +207,7 @@ class NeRFRenderer(nn.Module):
             density_outputs[k] = v.view(N, num_steps, -1)
 
         # upsample z_vals (nerf-like)
+        upsample_step = 0
         if upsample_steps > 0:
             with torch.no_grad():
 
@@ -300,8 +301,11 @@ class NeRFRenderer(nn.Module):
         # ori_z_vals = ((z_vals - nears) / (fars - nears)).clamp(0, 1)
         # depth = torch.sum(weights * ori_z_vals, dim=-1)
 
-        # calculate color
+        #calculate coordinates map
         weights = weights.unsqueeze(-1)
+        coordinates_map = (weights * xyzs).sum(dim=-2)
+
+        # calculate color
         image = torch.sum(weights * rgbs, dim=-2)  # [N, 3], in [0, 1]
 
         # mix background color
@@ -339,7 +343,8 @@ class NeRFRenderer(nn.Module):
             'depth_variance': depth_variance,
             'image': image,
             'semantic': semantic,
-            'semantic_features': semantic_features
+            'semantic_features': semantic_features,
+            'coordinates_map': coordinates_map
         }
 
     def run_cuda(self,
@@ -729,6 +734,7 @@ class NeRFRenderer(nn.Module):
             semantic = torch.empty((B, N, self.semantic_classes), device=device)
             semantic_features = torch.empty((B, N, self.hidden_dim_semantic),
                                             device=device)
+            coordinates_map = torch.empty((B, N, 3), device=device)
 
             for b in range(B):
                 head = 0
@@ -743,6 +749,7 @@ class NeRFRenderer(nn.Module):
                     semantic[b:b + 1, head:tail, :] = results_['semantic']
                     semantic_features[
                         b:b + 1, head:tail, :] = results_['semantic_features']
+                    coordinates_map[b:b + 1, head:tail, :] = results_['coordinates_map']
 
                     head += max_ray_batch
 
@@ -752,6 +759,7 @@ class NeRFRenderer(nn.Module):
             results['image'] = image
             results['semantic'] = semantic
             results['semantic_features'] = semantic_features
+            results['coordinates_map'] = coordinates_map
         else:
             results = _run(rays_o, rays_d, **kwargs)
 
