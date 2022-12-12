@@ -1,33 +1,30 @@
-import os
+import abc
 import glob
-import tqdm
 import math
+import os
 import random
-import warnings
-import tensorboardX
-
-import numpy as np
-
 import time
+import warnings
 from datetime import datetime
+from typing import Any, Dict, List, Tuple
 
 import cv2
 import matplotlib.pyplot as plt
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-import torch.distributed as dist
-from torch.utils.data import Dataset, DataLoader
-from matplotlib import cm
-
-import trimesh
 import mcubes
-from rich.console import Console
-from torch_ema import ExponentialMovingAverage
-
+import numpy as np
+import tensorboardX
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import tqdm
+import trimesh
+from matplotlib import cm
 from packaging import version as pver
+from rich.console import Console
+from torch.utils.data import DataLoader, Dataset
+from torch_ema import ExponentialMovingAverage
 
 colors = (cm.tab10(np.linspace(0, 1, 10)) * 255.0)[:, :3].astype(np.uint8)
 SEMANTIC_COLORS = np.concatenate([colors, colors, colors, colors], axis=0)
@@ -347,10 +344,9 @@ class Trainer(object):
             f'[INFO] #parameters: {sum([p.numel() for p in model.parameters() if p.requires_grad])}'
         )
 
-        # Temporary refernces to the passed class variables. These get configured in self.configure_optimizers()
-        self.optimizer_ = optimizer
-        self.lr_scheduler_ = lr_scheduler
-        self.configure_optimizers()
+        # configure the optimizers and lr_schedulers
+        self.optimizers, self.lr_schedulers = self.configure_optimizers(
+            optimizer, lr_scheduler)
 
         self.log(
             f"[INFO] Optimizers: {', '.join([f'opt{i}: {str(opt)}' for i, opt in enumerate(self.optimizers)])}"
@@ -403,16 +399,28 @@ class Trainer(object):
                 print(*args, file=self.log_ptr)
                 self.log_ptr.flush()  # write immediately to file
 
-    ### ------------------------------
-
+    #
+    # Training and evaluation step methods. Overwrite these to implement a custom trainer
+    #
     def train_step(self, data):
+        """Performs a training step. data is dict consisting of the current batch.
+
+        Args:
+            data (dict):  Input for the current batch. Required structure:
+            {
+                "rays_o":   torch.Tensor [B, N, 3],
+                "rays_d":   torch.Tensor [B, N, 3],
+                "images":   torch.Tensor [B, N,  3 | 4],
+                "H":        int,
+                "W":        int, 
+            }
+        """
 
         rays_o = data['rays_o']  # [B, N, 3]
         rays_d = data['rays_d']  # [B, N, 3]
 
         # if there is no gt image, we train with CLIP loss.
         if 'images' not in data:
-
             B, N = rays_o.shape[:2]
             H, W = data['H'], data['W']
 
@@ -427,12 +435,9 @@ class Trainer(object):
             pred_rgb = outputs['image'].reshape(B, H, W,
                                                 3).permute(0, 3, 1,
                                                            2).contiguous()
-
             # [debug] uncomment to plot the images used in train_step
             #torch_vis_2d(pred_rgb[0])
-
             loss = self.clip_loss(pred_rgb)
-
             return pred_rgb, None, loss
 
         images = data['images']  # [B, N, 3/4]
@@ -499,7 +504,6 @@ class Trainer(object):
             self.error_map[index] = error_map
 
         loss = loss.mean()
-
         return pred_rgb, gt_rgb, loss
 
     def eval_step(self, data):
@@ -590,29 +594,55 @@ class Trainer(object):
 
     ### ----- TRAINING -----
 
-    def configure_optimizers(self):
-        if self.optimizer_ is None:
-            self.optimizers = [
+    def configure_optimizers(
+        self,
+        optimizer: torch.optim.Optimizer = None,
+        lr_scheduler: torch.optim.lr_scheduler._LRScheduler = None
+    ) -> Tuple[List[torch.optim.Optimizer],
+               List[torch.optim.lr_scheduler._LRScheduler]]:
+        """Configures all optimizers used during trainig. For each optimizer in
+        the first output list, there has to be a cooresponding lr_scheduler at
+        the same index in the second output list.
+
+        Args:
+            optimizer (torch.optim.Optimizer): Configured optmizer, if None a
+            default optimizer will be chosen.
+            lr_scheduler (torch.optim.lr_scheduler._LRscheduler): Configured
+            lr_scheduler, if None a default lr_scheduler will be chosen.
+
+        Returns:
+            Tuple[List[torch.optim.Optimizer], 
+                  List[torch.optim.lr_scheduler._LRScheduler]]: Used optimizers
+                  and learning rate schedulers during training.
+        """
+        optimizers = []
+        lr_schedulers = []
+
+        if optimizer is None:
+            # naive adam
+            optimizers.append(
                 optim.Adam([{
                     "name": "model",
                     "params": self.model.parameters()
                 }],
                            lr=0.001,
-                           weight_decay=5e-4)
-            ]  # naive adam
+                           weight_decay=5e-4))
         else:
-            self.optimizers = [self.optimizer_(self.model)]
+            optimizers.append(optimizer(self.model))
 
-        if self.lr_scheduler_ is None:
-            self.lr_schedulers = [
-                optim.lr_scheduler.LambdaLR(self.optimizers[0],
-                                            lr_lambda=lambda epoch: 1)
-            ]  # fake scheduler
+        if lr_scheduler is None:
+            # fake scheduler
+            lr_schedulers.append(
+                optim.lr_scheduler.LambdaLR(optimizers[0],
+                                            lr_lambda=lambda epoch: 1))
         else:
-            self.lr_schedulers = [self.lr_scheduler_(self.optimizers[0])]
+            lr_schedulers.append(lr_scheduler(optimizers[0]))
+        return optimizers, lr_schedulers
 
-    def train(self, train_loader, valid_loader, max_epochs):
-
+    def train(self,
+              train_loader: torch.utils.data.DataLoader,
+              valid_loader: torch.utils.data.DataLoader = None,
+              max_epochs: int = 10):
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer = tensorboardX.SummaryWriter(
                 os.path.join(self.workspace, "run", self.name))
@@ -633,19 +663,22 @@ class Trainer(object):
             if self.workspace is not None and self.local_rank == 0:
                 self.save_checkpoint(full=True, best=False)
 
-            if self.epoch % self.eval_interval == 0:
+            if self.epoch % self.eval_interval == 0 and valid_loader is not None:
                 self.evaluate_one_epoch(valid_loader)
                 self.save_checkpoint(full=False, best=True)
 
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer.close()
 
-    def evaluate(self, loader, name=None):
+    def evaluate(self, loader: torch.utils.data.DataLoader, name: str = None):
         self.use_tensorboardX, use_tensorboardX = False, self.use_tensorboardX
         self.evaluate_one_epoch(loader, name)
         self.use_tensorboardX = use_tensorboardX
 
-    def test(self, loader, save_path=None, name=None):
+    def test(self,
+             loader: torch.utils.data.DataLoader,
+             save_path: str = None,
+             name: str = None):
 
         if save_path is None:
             save_path = os.path.join(self.workspace, 'results')
@@ -1096,7 +1129,7 @@ class Trainer(object):
             state['mean_density'] = self.model.mean_density
 
         if full:
-            for i, opt in self.optimizers:
+            for i, opt in enumerate(self.optimizers):
                 state[f"opt{i}"] = opt.state_dict()
             for i, lr_sched in enumerate(self.lr_schedulers):
                 state[f'lr_sched{i}'] = lr_sched.state_dict()
@@ -1161,7 +1194,6 @@ class Trainer(object):
         checkpoint_dict = torch.load(checkpoint, map_location=self.device)
 
         if 'model' not in checkpoint_dict:
-            print(checkpoint_dict)
             self.model.load_state_dict(checkpoint_dict)
             self.log("[INFO] loaded model.")
             return
