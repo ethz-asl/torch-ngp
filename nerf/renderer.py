@@ -335,6 +335,7 @@ class NeRFRenderer(nn.Module):
         # loss_dist = (torch.abs(mid_zs.unsqueeze(1) - mid_zs.unsqueeze(2)) * (weights.unsqueeze(1) * weights.unsqueeze(2))).sum() + 1/3 * ((z_vals_shifted - z_vals_shifted) * (weights ** 2)).sum()
 
         return {
+            "weights": weights_sum,
             'depth': depth,
             'image': image,
             'semantic': semantic,

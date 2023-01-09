@@ -908,7 +908,7 @@ class Trainer(object):
 
             for i, opt in enumerate(self.optimizers):
                 is_last = i == len(self.optimizers) - 1
-                self.scaler.scale(loss).backward()
+                self.scaler.scale(loss).backward(retain_graph=not is_last)
                 self.scaler.step(opt)
                 self.scaler.update()
 
