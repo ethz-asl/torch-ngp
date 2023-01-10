@@ -285,6 +285,7 @@ class NeRFRenderer(nn.Module):
                           mask=mask.reshape(-1),
                           geo_feat=geometric_features.view(
                               -1, geometric_features.shape[-1]),
+                          progress=progress,
                           sigma=sigma)
         rgbs = rgbs.view(N, -1, 3)  # [N, T+t, 3]
 

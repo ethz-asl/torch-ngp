@@ -675,7 +675,7 @@ class Trainer(object):
     @property
     def progress(self) -> float:
         """Progress indicator of the current epoch normalized to [0, 1)"""
-        return self.epoch / self.max_epochs
+        return (self.epoch - 1) / self.max_epochs
 
 
     def evaluate(self, loader: torch.utils.data.DataLoader, name: str = None):
