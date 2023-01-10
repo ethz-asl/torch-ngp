@@ -311,6 +311,7 @@ class Trainer(object):
 
         # variable init
         self.epoch = 1
+        self.max_epochs = 1
         self.global_step = 0
         self.local_step = 0
         self.stats = {
@@ -600,12 +601,12 @@ class Trainer(object):
         lr_scheduler: torch.optim.lr_scheduler._LRScheduler = None
     ) -> Tuple[List[torch.optim.Optimizer],
                List[torch.optim.lr_scheduler._LRScheduler]]:
-        """Configures all optimizers used during trainig. For each optimizer in
-        the first output list, there has to be a cooresponding lr_scheduler at
+        """Configures all optimizers used during training. For each optimizer in
+        the first output list, there has to be a corresponding lr_scheduler at
         the same index in the second output list.
 
         Args:
-            optimizer (torch.optim.Optimizer): Configured optmizer, if None a
+            optimizer (torch.optim.Optimizer): Configured optimizer, if None a
             default optimizer will be chosen.
             lr_scheduler (torch.optim.lr_scheduler._LRscheduler): Configured
             lr_scheduler, if None a default lr_scheduler will be chosen.
@@ -643,6 +644,7 @@ class Trainer(object):
               train_loader: torch.utils.data.DataLoader,
               valid_loader: torch.utils.data.DataLoader = None,
               max_epochs: int = 10):
+        self.max_epochs = max_epochs
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer = tensorboardX.SummaryWriter(
                 os.path.join(self.workspace, "run", self.name))
@@ -669,6 +671,12 @@ class Trainer(object):
 
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer.close()
+
+    @property
+    def progress(self) -> float:
+        """Progress indicator of the current epoch normalized to [0, 1)"""
+        return self.epoch / self.max_epochs
+
 
     def evaluate(self, loader: torch.utils.data.DataLoader, name: str = None):
         self.use_tensorboardX, use_tensorboardX = False, self.use_tensorboardX
@@ -866,9 +874,9 @@ class Trainer(object):
 
     def train_one_epoch(self, loader):
         self.log(f"==> Start Training Epoch {self.epoch}, " + ", ".join([
-            f"opt{i}: lr={opt.param_groups[0]['lr']:.6f}"
+            f"opt{i}: lr={opt.param_groups[0]['lr']:.6f} "
             for i, opt in enumerate(self.optimizers)
-        ]))
+        ]) + f"progress={self.progress}")
 
         total_loss = 0
         if self.local_rank == 0 and self.report_metric_at_train:

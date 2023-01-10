@@ -156,6 +156,7 @@ class NeRFRenderer(nn.Module):
             upsample_steps=128,
             bg_color=None,
             perturb=False,
+            progress=1.,
             **kwargs):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
         # bg_color: [3] in range [0, 1]
@@ -199,8 +200,8 @@ class NeRFRenderer(nn.Module):
 
         #plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
 
-        # query SDF and RGB
-        density_outputs = self.density(xyzs.reshape(-1, 3))
+        # query density
+        density_outputs = self.density(xyzs.reshape(-1, 3), progress=progress)
 
         #sigmas = density_outputs['sigma'].view(N, num_steps) # [N, T]
         for k, v in density_outputs.items():
@@ -241,7 +242,7 @@ class NeRFRenderer(nn.Module):
                 #                      aabb[3:])  # a manual clip.
 
             # only forward new points to save computation
-            new_density_outputs = self.density(new_xyzs.reshape(-1, 3))
+            new_density_outputs = self.density(new_xyzs.reshape(-1, 3), progress=progress)
             #new_sigmas = new_density_outputs['sigma'].view(N, upsample_steps) # [N, t]
             for k, v in new_density_outputs.items():
                 new_density_outputs[k] = v.view(N, upsample_steps, -1)
@@ -350,6 +351,7 @@ class NeRFRenderer(nn.Module):
                  perturb=False,
                  force_all_rays=False,
                  max_steps=1024,
+                 progress=1.,
                  **kwargs):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
         # return: image: [B, N, 3], depth: [B, N]
@@ -709,6 +711,7 @@ class NeRFRenderer(nn.Module):
                rays_d,
                staged=False,
                max_ray_batch=4096,
+               progress=1.,
                **kwargs):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
         # return: pred_rgb: [B, N, 3]
@@ -734,7 +737,7 @@ class NeRFRenderer(nn.Module):
                 while head < N:
                     tail = min(head + max_ray_batch, N)
                     results_ = _run(rays_o[b:b + 1, head:tail],
-                                    rays_d[b:b + 1, head:tail], **kwargs)
+                                    rays_d[b:b + 1, head:tail],progress=progress, **kwargs)
                     image[b:b + 1, head:tail] = results_['image']
                     depth[b:b + 1, head:tail] = results_['depth']
                     semantic[b:b + 1, head:tail, :] = results_['semantic']
@@ -749,6 +752,6 @@ class NeRFRenderer(nn.Module):
             results['semantic'] = semantic
             results['semantic_features'] = semantic_features
         else:
-            results = _run(rays_o, rays_d, **kwargs)
+            results = _run(rays_o, rays_d, progress=progress, **kwargs)
 
         return results
