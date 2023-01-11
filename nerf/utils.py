@@ -413,7 +413,7 @@ class Trainer(object):
                 "rays_d":   torch.Tensor [B, N, 3],
                 "images":   torch.Tensor [B, N,  3 | 4],
                 "H":        int,
-                "W":        int, 
+                "W":        int,
             }
         """
 
@@ -612,7 +612,7 @@ class Trainer(object):
             lr_scheduler, if None a default lr_scheduler will be chosen.
 
         Returns:
-            Tuple[List[torch.optim.Optimizer], 
+            Tuple[List[torch.optim.Optimizer],
                   List[torch.optim.lr_scheduler._LRScheduler]]: Used optimizers
                   and learning rate schedulers during training.
         """
@@ -676,7 +676,6 @@ class Trainer(object):
     def progress(self) -> float:
         """Progress indicator of the current epoch normalized to [0, 1)"""
         return (self.epoch - 1) / self.max_epochs
-
 
     def evaluate(self, loader: torch.utils.data.DataLoader, name: str = None):
         self.use_tensorboardX, use_tensorboardX = False, self.use_tensorboardX
