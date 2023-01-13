@@ -660,6 +660,9 @@ class Trainer(object):
         for epoch in range(self.epoch, max_epochs + 1):
             self.epoch = epoch
 
+            if hasattr(train_loader._data, "epoch"):
+                train_loader._data.epoch = self.epoch
+
             self.train_one_epoch(train_loader)
 
             if self.workspace is not None and self.local_rank == 0:
@@ -671,11 +674,6 @@ class Trainer(object):
 
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer.close()
-
-    @property
-    def progress(self) -> float:
-        """Progress indicator of the current epoch normalized to [0, 1)"""
-        return (self.epoch - 1) / self.max_epochs
 
     def evaluate(self, loader: torch.utils.data.DataLoader, name: str = None):
         self.use_tensorboardX, use_tensorboardX = False, self.use_tensorboardX
@@ -875,7 +873,7 @@ class Trainer(object):
         self.log(f"==> Start Training Epoch {self.epoch}, " + ", ".join([
             f"opt{i}: lr={opt.param_groups[0]['lr']:.6f} "
             for i, opt in enumerate(self.optimizers)
-        ]) + f"progress={self.progress}")
+        ]))
 
         total_loss = 0
         if self.local_rank == 0 and self.report_metric_at_train:
