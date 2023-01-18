@@ -25,6 +25,14 @@ def nerf_matrix_to_ngp(pose, scale=0.33):
     ], dtype=np.float32)
     return new_pose
 
+def ngp_to_nerf_matrix(pose, scale=0.33):
+    return np.array([
+        [pose[2, 0], -pose[2, 1], -pose[2, 2], pose[2, 3] / scale],
+        [pose[0, 0], -pose[0, 1], -pose[0, 2], pose[0, 3] / scale],
+        [pose[1, 0], -pose[1, 1], -pose[1, 2], pose[1, 3] / scale],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
 
 def visualize_poses(poses, size=0.1):
     # poses: [B, 4, 4]

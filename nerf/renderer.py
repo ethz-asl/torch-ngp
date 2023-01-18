@@ -156,6 +156,7 @@ class NeRFRenderer(nn.Module):
             upsample_steps=128,
             bg_color=None,
             perturb=False,
+            progress=1.,
             **kwargs):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
         # bg_color: [3] in range [0, 1]
@@ -195,12 +196,12 @@ class NeRFRenderer(nn.Module):
         xyzs = rays_o.unsqueeze(-2) + rays_d.unsqueeze(-2) * z_vals.unsqueeze(
             -1)  # [N, 1, 3] * [N, T, 1] -> [N, T, 3]
         # xyzs = torch.clip(xyzs, NEAR, FAR)
-        # xyzs = torch.min(torch.max(xyzs, aabb[:3]), aabb[3:]) # a manual clip.
+        # xyzs = torch.min(torch.max(xyzs, aabb[:3]), aabb[3:])  # a manual clip.
 
         #plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
 
-        # query SDF and RGB
-        density_outputs = self.density(xyzs.reshape(-1, 3))
+        # query density
+        density_outputs = self.density(xyzs.reshape(-1, 3), progress=progress)
 
         #sigmas = density_outputs['sigma'].view(N, num_steps) # [N, T]
         for k, v in density_outputs.items():
@@ -237,10 +238,11 @@ class NeRFRenderer(nn.Module):
                     -2) + rays_d.unsqueeze(-2) * new_z_vals.unsqueeze(
                         -1)  # [N, 1, 3] * [N, t, 1] -> [N, t, 3]
                 # new_xyzs = torch.clip(new_xyzs, NEAR, FAR)
-                # new_xyzs = torch.min(torch.max(new_xyzs, aabb[:3]), aabb[3:]) # a manual clip.
+                # new_xyzs = torch.min(torch.max(new_xyzs, aabb[:3]),
+                #                      aabb[3:])  # a manual clip.
 
             # only forward new points to save computation
-            new_density_outputs = self.density(new_xyzs.reshape(-1, 3))
+            new_density_outputs = self.density(new_xyzs.reshape(-1, 3), progress=progress)
             #new_sigmas = new_density_outputs['sigma'].view(N, upsample_steps) # [N, t]
             for k, v in new_density_outputs.items():
                 new_density_outputs[k] = v.view(N, upsample_steps, -1)
@@ -283,6 +285,7 @@ class NeRFRenderer(nn.Module):
                           mask=mask.reshape(-1),
                           geo_feat=geometric_features.view(
                               -1, geometric_features.shape[-1]),
+                          progress=progress,
                           sigma=sigma)
         rgbs = rgbs.view(N, -1, 3)  # [N, T+t, 3]
 
@@ -334,6 +337,7 @@ class NeRFRenderer(nn.Module):
         # loss_dist = (torch.abs(mid_zs.unsqueeze(1) - mid_zs.unsqueeze(2)) * (weights.unsqueeze(1) * weights.unsqueeze(2))).sum() + 1/3 * ((z_vals_shifted - z_vals_shifted) * (weights ** 2)).sum()
 
         return {
+            "weights": weights_sum,
             'depth': depth,
             'image': image,
             'semantic': semantic,
@@ -348,6 +352,7 @@ class NeRFRenderer(nn.Module):
                  perturb=False,
                  force_all_rays=False,
                  max_steps=1024,
+                 progress=1.,
                  **kwargs):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
         # return: image: [B, N, 3], depth: [B, N]
@@ -707,6 +712,7 @@ class NeRFRenderer(nn.Module):
                rays_d,
                staged=False,
                max_ray_batch=4096,
+               progress=1.,
                **kwargs):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
         # return: pred_rgb: [B, N, 3]
@@ -724,6 +730,7 @@ class NeRFRenderer(nn.Module):
             depth = torch.empty((B, N), device=device)
             image = torch.empty((B, N, 3), device=device)
             semantic = torch.empty((B, N, self.semantic_classes), device=device)
+            weights = torch.empty((B, N), device=device)
             semantic_features = torch.empty((B, N, self.hidden_dim_semantic),
                                             device=device)
 
@@ -732,10 +739,11 @@ class NeRFRenderer(nn.Module):
                 while head < N:
                     tail = min(head + max_ray_batch, N)
                     results_ = _run(rays_o[b:b + 1, head:tail],
-                                    rays_d[b:b + 1, head:tail], **kwargs)
+                                    rays_d[b:b + 1, head:tail],progress=progress, **kwargs)
                     image[b:b + 1, head:tail] = results_['image']
                     depth[b:b + 1, head:tail] = results_['depth']
                     semantic[b:b + 1, head:tail, :] = results_['semantic']
+                    weights[b:b + 1, head:tail] = results_['weights']
                     semantic_features[
                         b:b + 1, head:tail, :] = results_['semantic_features']
 
@@ -745,8 +753,9 @@ class NeRFRenderer(nn.Module):
             results['depth'] = depth
             results['image'] = image
             results['semantic'] = semantic
+            results['weights'] = weights
             results['semantic_features'] = semantic_features
         else:
-            results = _run(rays_o, rays_d, **kwargs)
+            results = _run(rays_o, rays_d, progress=progress, **kwargs)
 
         return results
