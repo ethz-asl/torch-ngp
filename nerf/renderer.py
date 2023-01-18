@@ -730,6 +730,7 @@ class NeRFRenderer(nn.Module):
             depth = torch.empty((B, N), device=device)
             image = torch.empty((B, N, 3), device=device)
             semantic = torch.empty((B, N, self.semantic_classes), device=device)
+            weights = torch.empty((B, N), device=device)
             semantic_features = torch.empty((B, N, self.hidden_dim_semantic),
                                             device=device)
 
@@ -742,6 +743,7 @@ class NeRFRenderer(nn.Module):
                     image[b:b + 1, head:tail] = results_['image']
                     depth[b:b + 1, head:tail] = results_['depth']
                     semantic[b:b + 1, head:tail, :] = results_['semantic']
+                    weights[b:b + 1, head:tail] = results_['weights']
                     semantic_features[
                         b:b + 1, head:tail, :] = results_['semantic_features']
 
@@ -751,6 +753,7 @@ class NeRFRenderer(nn.Module):
             results['depth'] = depth
             results['image'] = image
             results['semantic'] = semantic
+            results['weights'] = weights
             results['semantic_features'] = semantic_features
         else:
             results = _run(rays_o, rays_d, progress=progress, **kwargs)

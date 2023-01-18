@@ -98,7 +98,7 @@ class _near_far_from_aabb(Function):
 
         N, _ = rays_o.shape
         # index masks cannot be of type uint8. therefore we convet them there to ints
-        near_indices = near_indices.to(int) 
+        near_indices = near_indices.to(int)
         far_indices = far_indices.to(int)
         indicator_near = _near_far_from_aabb.get_indicator(near_indices,
                                                            N,
@@ -331,7 +331,7 @@ class _march_rays_train(Function):
         deltas = torch.zeros(M, 2, dtype=rays_o.dtype, device=rays_o.device)
         ts = torch.zeros(M, 1, dtype=rays_o.dtype, device=rays_o.device)
         # [id, offset, num_steps]
-        rays = torch.empty(N, 3, dtype=torch.int32, device=rays_o.device)  
+        rays = torch.empty(N, 3, dtype=torch.int32, device=rays_o.device)
 
         if step_counter is None:
             step_counter = torch.zeros(
