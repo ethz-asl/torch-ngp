@@ -1046,10 +1046,12 @@ class Trainer(object):
         if name is None:
             name = f'{self.name}_ep{self.epoch:04d}'
 
+        assert (isinstance(self.fp16, bool))
         state = {
             'epoch': self.epoch,
             'global_step': self.global_step,
             'stats': self.stats,
+            'precision': "half" if self.fp16 else "full"
         }
 
         if self.model.cuda_ray:
