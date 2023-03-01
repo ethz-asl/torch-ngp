@@ -160,6 +160,9 @@ class NeRFRenderer(nn.Module):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
         # bg_color: [3] in range [0, 1]
         # return: image: [B, N, 3], depth: [B, N]
+        assert (num_steps == 512)
+        assert (upsample_steps == 0)
+        assert (bg_color is None)
 
         prefix = rays_o.shape[:-1]
         rays_o = rays_o.contiguous().view(-1, 3)
