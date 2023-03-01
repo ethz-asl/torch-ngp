@@ -274,8 +274,10 @@ class NeRFRenderer(nn.Module):
         depth = (weights * z_vals).sum(dim=-1)
         depth = depth / direction_norms
 
-        depth_variance = (weights *
-                          (depth[..., None] - z_vals)**2).sum(dim=-1).detach()
+        depth_variance = (
+            weights *
+            (depth[..., None] - z_vals / direction_norms[..., None])**2).sum(
+                dim=-1).detach()
 
         #calculate coordinates map
         weights = weights.unsqueeze(-1)
