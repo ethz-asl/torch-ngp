@@ -116,7 +116,8 @@ def get_rays(poses, intrinsics, H, W, N=-1, error_map=None):
     xs = (i - cx) / fx * zs
     ys = (j - cy) / fy * zs
     directions = torch.stack((xs, ys, zs), dim=-1)
-    directions = directions / torch.norm(directions, dim=-1, keepdim=True)
+    direction_norms = torch.norm(directions, dim=-1, keepdim=True)
+    directions = directions / direction_norms
     rays_d = directions @ poses[:, :3, :3].transpose(-1, -2)  # (B, N, 3)
 
     rays_o = poses[..., :3, 3]  # [B, 3]
@@ -124,6 +125,7 @@ def get_rays(poses, intrinsics, H, W, N=-1, error_map=None):
 
     results['rays_o'] = rays_o
     results['rays_d'] = rays_d
+    results['direction_norms'] = direction_norms
 
     return results
 

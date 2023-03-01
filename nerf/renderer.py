@@ -152,6 +152,7 @@ class NeRFRenderer(nn.Module):
     def run(self,
             rays_o,
             rays_d,
+            direction_norms,
             num_steps=128,
             upsample_steps=128,
             bg_color=None,
@@ -167,6 +168,7 @@ class NeRFRenderer(nn.Module):
         prefix = rays_o.shape[:-1]
         rays_o = rays_o.contiguous().view(-1, 3)
         rays_d = rays_d.contiguous().view(-1, 3)
+        direction_norms = direction_norms.contiguous().view(-1)
 
         N = rays_o.shape[0]  # N = B * N, in fact
         device = rays_o.device
@@ -237,6 +239,8 @@ class NeRFRenderer(nn.Module):
 
         # calculate depth
         depth = (weights * z_vals).sum(dim=-1)
+        depth = depth / direction_norms
+
         depth_variance = (weights *
                           (depth[..., None] - z_vals)**2).sum(dim=-1).detach()
 
@@ -648,6 +652,7 @@ class NeRFRenderer(nn.Module):
     def render(self,
                rays_o,
                rays_d,
+               direction_norms,
                staged=False,
                max_ray_batch=4096,
                **kwargs):
@@ -678,7 +683,9 @@ class NeRFRenderer(nn.Module):
                 while head < N:
                     tail = min(head + max_ray_batch, N)
                     results_ = _run(rays_o[b:b + 1, head:tail],
-                                    rays_d[b:b + 1, head:tail], **kwargs)
+                                    rays_d[b:b + 1, head:tail],
+                                    direction_norms[b:b + 1,
+                                                    head:tail], **kwargs)
                     image[b:b + 1, head:tail] = results_['image']
                     depth[b:b + 1, head:tail] = results_['depth']
                     depth_variance[b:b + 1,
@@ -698,6 +705,6 @@ class NeRFRenderer(nn.Module):
             results['semantic_features'] = semantic_features
             results['coordinates_map'] = coordinates_map
         else:
-            results = _run(rays_o, rays_d, **kwargs)
+            results = _run(rays_o, rays_d, direction_norms, **kwargs)
 
         return results
