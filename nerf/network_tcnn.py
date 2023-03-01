@@ -102,6 +102,7 @@ class NeRFNetwork(NeRFRenderer):
 
     def density(self, x):
         # x: [N, 3], in [-bound, bound]
+        assert (False)
 
         x = self._preprocess(x)
         x = self.encoder(x)

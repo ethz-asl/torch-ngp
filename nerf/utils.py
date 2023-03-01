@@ -76,6 +76,7 @@ def get_rays(poses, intrinsics, H, W, N=-1, error_map=None):
     results = {}
 
     if N > 0:
+        assert (False)
         N = min(N, H * W)
 
         if error_map is None:
