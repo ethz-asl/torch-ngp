@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch_ngp import raymarching
-from .utils import custom_meshgrid
+from .utils import custom_meshgrid, get_rays
 
 MAX_DISTANCE = 100.0
 NEAR = 0.05
@@ -148,6 +148,40 @@ class NeRFRenderer(nn.Module):
         self.step_counter.zero_()
         self.mean_count = 0
         self.local_step = 0
+
+    def render_from_given_pose(self,
+                               c2w,
+                               intrinsics,
+                               H,
+                               W,
+                               staged=False,
+                               max_ray_batch=4096,
+                               bg_color=None,
+                               perturb=False,
+                               **kwargs):
+        r"""NOTE: It is assumed that the input W_T_C pose is already in NeRF
+        format.
+        """
+        assert (c2w.shape == (4, 4))
+
+        # Construct rays from given camera pose.
+        rays = get_rays(poses=c2w[None], intrinsics=intrinsics, H=H, W=W, N=-1)
+        rays_o = rays['rays_o']
+        rays_d = rays['rays_d']
+        direction_norms = rays['direction_norms']
+        assert (rays_o.ndim == 3 and rays_d.ndim == 3 and rays_o.shape[0] ==
+                rays_d.shape[0] == direction_norms.shape[0] == 1 and
+                rays_o.shape[-1] == rays_d.shape[-1] == 3)
+
+        # Use the obtained rays to render.
+        return self.render(rays_o=rays_o,
+                           rays_d=rays_d,
+                           direction_norms=direction_norms,
+                           staged=staged,
+                           max_ray_batch=max_ray_batch,
+                           bg_color=bg_color,
+                           perturb=perturb,
+                           **kwargs), rays_o, rays_d
 
     def run(self,
             rays_o,
