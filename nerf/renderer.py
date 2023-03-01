@@ -693,7 +693,8 @@ class NeRFRenderer(nn.Module):
                     semantic[b:b + 1, head:tail, :] = results_['semantic']
                     semantic_features[
                         b:b + 1, head:tail, :] = results_['semantic_features']
-                    coordinates_map[b:b + 1, head:tail, :] = results_['coordinates_map']
+                    coordinates_map[b:b + 1,
+                                    head:tail, :] = results_['coordinates_map']
 
                     head += max_ray_batch
 
