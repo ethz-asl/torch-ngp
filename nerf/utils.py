@@ -1,33 +1,30 @@
-import os
+import abc
 import glob
-import tqdm
 import math
+import os
 import random
-import warnings
-import tensorboardX
-
-import numpy as np
-
 import time
+import warnings
 from datetime import datetime
+from typing import Any, Dict, List, Tuple
 
 import cv2
 import matplotlib.pyplot as plt
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-import torch.distributed as dist
-from torch.utils.data import Dataset, DataLoader
-from matplotlib import cm
-
-import trimesh
 import mcubes
-from rich.console import Console
-from torch_ema import ExponentialMovingAverage
-
+import numpy as np
+import tensorboardX
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import tqdm
+import trimesh
+from matplotlib import cm
 from packaging import version as pver
+from rich.console import Console
+from torch.utils.data import DataLoader, Dataset
+from torch_ema import ExponentialMovingAverage
 
 colors = (cm.tab10(np.linspace(0, 1, 10)) * 255.0)[:, :3].astype(np.uint8)
 SEMANTIC_COLORS = np.concatenate([colors, colors, colors, colors], axis=0)
@@ -311,19 +308,6 @@ class Trainer(object):
             criterion.to(self.device)
         self.criterion = criterion
 
-        if optimizer is None:
-            self.optimizer = optim.Adam(self.model.parameters(),
-                                        lr=0.001,
-                                        weight_decay=5e-4)  # naive adam
-        else:
-            self.optimizer = optimizer(self.model)
-
-        if lr_scheduler is None:
-            self.lr_scheduler = optim.lr_scheduler.LambdaLR(
-                self.optimizer, lr_lambda=lambda epoch: 1)  # fake scheduler
-        else:
-            self.lr_scheduler = lr_scheduler(self.optimizer)
-
         if ema_decay is not None:
             self.ema = ExponentialMovingAverage(self.model.parameters(),
                                                 decay=ema_decay)
@@ -334,6 +318,7 @@ class Trainer(object):
 
         # variable init
         self.epoch = 1
+        self.max_epochs = 1
         self.global_step = 0
         self.local_step = 0
         self.stats = {
@@ -365,6 +350,19 @@ class Trainer(object):
         )
         self.log(
             f'[INFO] #parameters: {sum([p.numel() for p in model.parameters() if p.requires_grad])}'
+        )
+
+        # configure the optimizers and lr_schedulers
+        self.optimizers, self.lr_schedulers = self.configure_optimizers(
+            optimizer, lr_scheduler)
+
+        self.log(
+            f"[INFO] Optimizers: {', '.join([f'opt{i}: {str(opt)}' for i, opt in enumerate(self.optimizers)])}"
+        )
+        group_names = lambda groups: ", ".join(
+            [group["name"] for group in groups])
+        self.log(
+            f"[INFO] Optimizing over: {', '.join([f'opt{i}: {group_names(opt.param_groups)}' for i, opt in enumerate(self.optimizers)])}"
         )
 
         if self.workspace is not None:
@@ -409,16 +407,28 @@ class Trainer(object):
                 print(*args, file=self.log_ptr)
                 self.log_ptr.flush()  # write immediately to file
 
-    ### ------------------------------
-
+    #
+    # Training and evaluation step methods. Overwrite these to implement a custom trainer
+    #
     def train_step(self, data):
+        """Performs a training step. data is dict consisting of the current batch.
+
+        Args:
+            data (dict):  Input for the current batch. Required structure:
+            {
+                "rays_o":   torch.Tensor [B, N, 3],
+                "rays_d":   torch.Tensor [B, N, 3],
+                "images":   torch.Tensor [B, N,  3 | 4],
+                "H":        int,
+                "W":        int,
+            }
+        """
 
         rays_o = data['rays_o']  # [B, N, 3]
         rays_d = data['rays_d']  # [B, N, 3]
 
         # if there is no gt image, we train with CLIP loss.
         if 'images' not in data:
-
             B, N = rays_o.shape[:2]
             H, W = data['H'], data['W']
 
@@ -433,12 +443,9 @@ class Trainer(object):
             pred_rgb = outputs['image'].reshape(B, H, W,
                                                 3).permute(0, 3, 1,
                                                            2).contiguous()
-
             # [debug] uncomment to plot the images used in train_step
             #torch_vis_2d(pred_rgb[0])
-
             loss = self.clip_loss(pred_rgb)
-
             return pred_rgb, None, loss
 
         images = data['images']  # [B, N, 3/4]
@@ -505,7 +512,6 @@ class Trainer(object):
             self.error_map[index] = error_map
 
         loss = loss.mean()
-
         return pred_rgb, gt_rgb, loss
 
     def eval_step(self, data):
@@ -594,9 +600,58 @@ class Trainer(object):
 
         self.log(f"==> Finished saving mesh.")
 
-    ### ------------------------------
+    ### ----- TRAINING -----
 
-    def train(self, train_loader, valid_loader, max_epochs):
+    def configure_optimizers(
+        self,
+        optimizer: torch.optim.Optimizer = None,
+        lr_scheduler: torch.optim.lr_scheduler._LRScheduler = None
+    ) -> Tuple[List[torch.optim.Optimizer],
+               List[torch.optim.lr_scheduler._LRScheduler]]:
+        """Configures all optimizers used during training. For each optimizer in
+        the first output list, there has to be a corresponding lr_scheduler at
+        the same index in the second output list.
+
+        Args:
+            optimizer (torch.optim.Optimizer): Configured optimizer, if None a
+            default optimizer will be chosen.
+            lr_scheduler (torch.optim.lr_scheduler._LRscheduler): Configured
+            lr_scheduler, if None a default lr_scheduler will be chosen.
+
+        Returns:
+            Tuple[List[torch.optim.Optimizer],
+                  List[torch.optim.lr_scheduler._LRScheduler]]: Used optimizers
+                  and learning rate schedulers during training.
+        """
+        optimizers = []
+        lr_schedulers = []
+
+        if optimizer is None:
+            # naive adam
+            optimizers.append(
+                optim.Adam([{
+                    "name": "model",
+                    "params": self.model.parameters()
+                }],
+                           lr=0.001,
+                           weight_decay=5e-4))
+        else:
+            optimizers.append(optimizer(self.model))
+
+        if lr_scheduler is None:
+            # fake scheduler
+            lr_schedulers.append(
+                optim.lr_scheduler.LambdaLR(optimizers[0],
+                                            lr_lambda=lambda epoch: 1))
+        else:
+            lr_schedulers.append(lr_scheduler(optimizers[0]))
+        return optimizers, lr_schedulers
+
+    def train(self,
+              train_loader: torch.utils.data.DataLoader,
+              valid_loader: torch.utils.data.DataLoader = None,
+              max_epochs: int = 10):
+        self.max_epochs = max_epochs
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer = tensorboardX.SummaryWriter(
                 os.path.join(self.workspace, "run", self.name))
@@ -612,24 +667,30 @@ class Trainer(object):
         for epoch in range(self.epoch, max_epochs + 1):
             self.epoch = epoch
 
+            if hasattr(train_loader._data, "epoch"):
+                train_loader._data.epoch = self.epoch
+
             self.train_one_epoch(train_loader)
 
             if self.workspace is not None and self.local_rank == 0:
                 self.save_checkpoint(full=True, best=False)
 
-            if self.epoch % self.eval_interval == 0:
+            if self.epoch % self.eval_interval == 0 and valid_loader is not None:
                 self.evaluate_one_epoch(valid_loader)
                 self.save_checkpoint(full=False, best=True)
 
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer.close()
 
-    def evaluate(self, loader, name=None):
+    def evaluate(self, loader: torch.utils.data.DataLoader, name: str = None):
         self.use_tensorboardX, use_tensorboardX = False, self.use_tensorboardX
         self.evaluate_one_epoch(loader, name)
         self.use_tensorboardX = use_tensorboardX
 
-    def test(self, loader, save_path=None, name=None):
+    def test(self,
+             loader: torch.utils.data.DataLoader,
+             save_path: str = None,
+             name: str = None):
 
         if save_path is None:
             save_path = os.path.join(self.workspace, 'results')
@@ -710,17 +771,22 @@ class Trainer(object):
 
             self.global_step += 1
 
-            self.optimizer.zero_grad()
+            # reset all optimizers
+            for opt in self.optimizers:
+                opt.zero_grad()
 
             with torch.cuda.amp.autocast(enabled=self.fp16):
                 preds, truths, loss = self.train_step(data)
 
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            for i, opt in enumerate(self.optimizers):
+                is_last = i == len(self.optimizers) - 1
+                self.scaler.scale(loss).backward(retain_graph=not is_last)
+                self.scaler.step(opt)
+                self.scaler.update()
 
             if self.scheduler_update_every_step:
-                self.lr_scheduler.step()
+                for lr_sched in self.lr_schedulers:
+                    lr_sched.step()
 
             total_loss += loss.detach()
 
@@ -730,15 +796,16 @@ class Trainer(object):
         average_loss = total_loss.item() / step
 
         if not self.scheduler_update_every_step:
-            if isinstance(self.lr_scheduler,
-                          torch.optim.lr_scheduler.ReduceLROnPlateau):
-                self.lr_scheduler.step(average_loss)
-            else:
-                self.lr_scheduler.step()
+            for lr_sched in self.lr_schedulers:
+                if isinstance(lr_sched,
+                              torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    lr_sched.step(average_loss)
+                else:
+                    lr_sched.step()
 
         outputs = {
             'loss': average_loss,
-            'lr': self.optimizer.param_groups[0]['lr'],
+            'lr': self.optimizer[0].param_groups[0]['lr'],
         }
 
         return outputs
@@ -810,9 +877,10 @@ class Trainer(object):
         return outputs
 
     def train_one_epoch(self, loader):
-        self.log(
-            f"==> Start Training Epoch {self.epoch}, lr={self.optimizer.param_groups[0]['lr']:.6f} ..."
-        )
+        self.log(f"==> Start Training Epoch {self.epoch}, " + ", ".join([
+            f"opt{i}: lr={opt.param_groups[0]['lr']:.6f} "
+            for i, opt in enumerate(self.optimizers)
+        ]))
 
         total_loss = 0
         if self.local_rank == 0 and self.report_metric_at_train:
@@ -844,17 +912,21 @@ class Trainer(object):
             self.local_step += 1
             self.global_step += 1
 
-            self.optimizer.zero_grad()
+            for opt in self.optimizers:
+                opt.zero_grad()
 
             with torch.cuda.amp.autocast(enabled=self.fp16):
                 preds, truths, loss = self.train_step(data)
 
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            for i, opt in enumerate(self.optimizers):
+                is_last = i == len(self.optimizers) - 1
+                self.scaler.scale(loss).backward(retain_graph=not is_last)
+                self.scaler.step(opt)
+                self.scaler.update()
 
             if self.scheduler_update_every_step:
-                self.lr_scheduler.step()
+                for lr_sched in self.lr_schedulers:
+                    lr_sched.step()
 
             loss_val = loss.item()
             total_loss += loss_val
@@ -867,14 +939,18 @@ class Trainer(object):
                 if self.use_tensorboardX:
                     self.writer.add_scalar("train/loss", loss_val,
                                            self.global_step)
-                    self.writer.add_scalar("train/lr",
-                                           self.optimizer.param_groups[0]['lr'],
-                                           self.global_step)
+                    for i, opt in enumerate(self.optimizers):
+                        self.writer.add_scalar(f"train/opt{i}/lr",
+                                               opt.param_groups[0]['lr'],
+                                               self.global_step)
 
                 if self.scheduler_update_every_step:
                     pbar.set_description(
-                        f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f}), lr={self.optimizer.param_groups[0]['lr']:.6f}"
-                    )
+                        f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f}), "
+                        + ", ".join([
+                            f"opt{i}: lr={opt.param_groups[0]['lr']:.6f}"
+                            for i, opt in enumerate(self.optimizers)
+                        ]))
                 else:
                     pbar.set_description(
                         f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f})"
@@ -897,11 +973,12 @@ class Trainer(object):
                     metric.clear()
 
         if not self.scheduler_update_every_step:
-            if isinstance(self.lr_scheduler,
-                          torch.optim.lr_scheduler.ReduceLROnPlateau):
-                self.lr_scheduler.step(average_loss)
-            else:
-                self.lr_scheduler.step()
+            for lr_sched in self.lr_schedulers:
+                if isinstance(lr_sched,
+                              torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    lr_sched.step(average_loss)
+                else:
+                    lr_sched.step()
 
         self.log(f"==> Finished Epoch {self.epoch}.")
 
@@ -1066,8 +1143,11 @@ class Trainer(object):
             state['mean_density'] = self.model.mean_density
 
         if full:
-            state['optimizer'] = self.optimizer.state_dict()
-            state['lr_scheduler'] = self.lr_scheduler.state_dict()
+            for i, opt in enumerate(self.optimizers):
+                state[f"opt{i}"] = opt.state_dict()
+            for i, lr_sched in enumerate(self.lr_schedulers):
+                state[f'lr_sched{i}'] = lr_sched.state_dict()
+
             state['scaler'] = self.scaler.state_dict()
             if self.ema is not None:
                 state['ema'] = self.ema.state_dict()
@@ -1159,24 +1239,22 @@ class Trainer(object):
             f"[INFO] load at epoch {self.epoch}, global step {self.global_step}"
         )
 
-        if self.optimizer and 'optimizer' in checkpoint_dict:
-            try:
-                self.optimizer.load_state_dict(checkpoint_dict['optimizer'])
-                self.log("[INFO] loaded optimizer.")
-            except:
-                self.log("[WARN] Failed to load optimizer.")
+        def load_modules(modules, starts_with):
+            for key in checkpoint_dict.keys():
+                if not key.startswith(starts_with):
+                    continue
+                idx = int(key[len(starts_with):])  # skip "opt" in opt_key
+                if idx >= len(modules):
+                    self.log(
+                        f"[WARN] {key} found in checkpoint but not defined for the trainer"
+                    )
+                    continue
+                try:
+                    modules[idx].load_state_dict(checkpoint_dict[key])
+                    self.log(f"[INFO] loaded {key}.")
+                except:
+                    self.log(f"[WARN] Failed to load {key}.")
+            return modules
 
-        if self.lr_scheduler and 'lr_scheduler' in checkpoint_dict:
-            try:
-                self.lr_scheduler.load_state_dict(
-                    checkpoint_dict['lr_scheduler'])
-                self.log("[INFO] loaded scheduler.")
-            except:
-                self.log("[WARN] Failed to load scheduler.")
-
-        if self.scaler and 'scaler' in checkpoint_dict:
-            try:
-                self.scaler.load_state_dict(checkpoint_dict['scaler'])
-                self.log("[INFO] loaded scaler.")
-            except:
-                self.log("[WARN] Failed to load scaler.")
+        load_modules(self.optimizers, starts_with="opt")
+        load_modules(self.lr_schedulers, starts_with="lr_sched")

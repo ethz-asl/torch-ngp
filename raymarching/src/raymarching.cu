@@ -37,6 +37,11 @@ inline __host__ __device__ float clamp(const float x, const float min, const flo
     return fminf(max, fmaxf(min, x));
 }
 
+
+inline __host__ __device__ void swapu(uint8_t& a, uint8_t& b) {
+    uint8_t c = a; a = b; b = c;
+}
+
 inline __host__ __device__ void swapf(float& a, float& b) {
     float c = a; a = b; b = c;
 }
@@ -97,7 +102,8 @@ __global__ void kernel_near_far_from_aabb(
     const scalar_t * __restrict__ aabb,
     const uint32_t N,
     const float min_near,
-    scalar_t * nears, scalar_t * fars
+    scalar_t * nears, scalar_t * fars,
+    uint8_t *near_indices, uint8_t  *far_indices
 ) {
     // parallel per ray
     const uint32_t n = threadIdx.x + blockIdx.x * blockDim.x;
@@ -107,53 +113,88 @@ __global__ void kernel_near_far_from_aabb(
     rays_o += n * 3;
     rays_d += n * 3;
 
+
     const float ox = rays_o[0], oy = rays_o[1], oz = rays_o[2];
     const float dx = rays_d[0], dy = rays_d[1], dz = rays_d[2];
     const float rdx = 1 / dx, rdy = 1 / dy, rdz = 1 / dz;
 
+
     // get near far (assume cube scene)
     float near = (aabb[0] - ox) * rdx;
     float far = (aabb[3] - ox) * rdx;
-    if (near > far) swapf(near, far);
+    uint8_t near_idx = 0;
+    uint8_t far_idx = 3;
+    if (near > far) {
+        swapf(near, far);
+        swapu(near_idx, far_idx);
+    }
 
     float near_y = (aabb[1] - oy) * rdy;
     float far_y = (aabb[4] - oy) * rdy;
-    if (near_y > far_y) swapf(near_y, far_y);
+    uint8_t near_y_idx = 1;
+    uint8_t far_y_idx = 4;
+    if (near_y > far_y) {
+        swapf(near_y, far_y);
+        swapu(near_y_idx, far_y_idx);
+    }
 
     if (near > far_y || near_y > far) {
         nears[n] = fars[n] = std::numeric_limits<scalar_t>::max();
+        near_indices[n] = far_indices[n] = 255; // ERROR value == -1
         return;
     }
 
-    if (near_y > near) near = near_y;
-    if (far_y < far) far = far_y;
+    if (near_y > near) {
+        near = near_y;
+        near_idx = near_y_idx;
+    }
+    if (far_y < far) {
+        far = far_y;
+        far_idx = far_y_idx;
+    }
 
     float near_z = (aabb[2] - oz) * rdz;
     float far_z = (aabb[5] - oz) * rdz;
-    if (near_z > far_z) swapf(near_z, far_z);
+    uint8_t near_z_idx = 2;
+    uint8_t far_z_idx = 5;
+    if (near_z > far_z) {
+        swapf(near_z, far_z);
+        swapu(near_z_idx, far_z_idx);
+    }
+
 
     if (near > far_z || near_z > far) {
         nears[n] = fars[n] = std::numeric_limits<scalar_t>::max();
+        near_indices[n] = far_indices[n] = 255; // ERROR value == -1
         return;
     }
 
-    if (near_z > near) near = near_z;
-    if (far_z < far) far = far_z;
+    if (near_z > near) {
+        near = near_z;
+        near_idx = near_z_idx;
+    }
+    if (far_z < far) {
+        far = far_z;
+        far_idx = far_z_idx;
+    }
 
-    if (near < min_near) near = min_near;
+    if (near < min_near)
+        near = min_near;
 
     nears[n] = near;
     fars[n] = far;
+    near_indices[n] = near_idx;
+    far_indices[n] = far_idx;
 }
 
 
-void near_far_from_aabb(at::Tensor rays_o, at::Tensor rays_d, at::Tensor aabb, const uint32_t N, const float min_near, at::Tensor nears, at::Tensor fars) {
+void near_far_from_aabb(at::Tensor rays_o, at::Tensor rays_d, at::Tensor aabb, const uint32_t N, const float min_near, at::Tensor nears, at::Tensor fars, at::Tensor near_indices, at::Tensor far_indices) {
 
     static constexpr uint32_t N_THREAD = 256;
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
     rays_o.scalar_type(), "near_far_from_aabb", ([&] {
-        kernel_near_far_from_aabb<<<div_round_up(N, N_THREAD), N_THREAD>>>(rays_o.data_ptr<scalar_t>(), rays_d.data_ptr<scalar_t>(), aabb.data_ptr<scalar_t>(), N, min_near, nears.data_ptr<scalar_t>(), fars.data_ptr<scalar_t>());
+        kernel_near_far_from_aabb<<<div_round_up(N, N_THREAD), N_THREAD>>>(rays_o.data_ptr<scalar_t>(), rays_d.data_ptr<scalar_t>(), aabb.data_ptr<scalar_t>(), N, min_near, nears.data_ptr<scalar_t>(), fars.data_ptr<scalar_t>(), near_indices.data_ptr<uint8_t>(), far_indices.data_ptr<uint8_t>());
     }));
 }
 
@@ -321,8 +362,7 @@ __global__ void kernel_march_rays_train(
     const scalar_t* __restrict__ nears, 
     const scalar_t* __restrict__ fars,
     scalar_t * xyzs, scalar_t * dirs, scalar_t * deltas,
-    int * rays,
-    int * counter,
+    scalar_t * ts, int * rays, int * counter,
     const uint32_t perturb,
     pcg32 rng
 ) {
@@ -421,6 +461,7 @@ __global__ void kernel_march_rays_train(
     xyzs += point_index * 3;
     dirs += point_index * 3;
     deltas += point_index * 2;
+    ts += point_index;
 
     t = t0;
     uint32_t step = 0;
@@ -462,10 +503,12 @@ __global__ void kernel_march_rays_train(
             t += dt;
             deltas[0] = dt;
             deltas[1] = t - last_t; // used to calc depth
+            ts[0] = t;
             last_t = t;
             xyzs += 3;
             dirs += 3;
             deltas += 2;
+            ts++;
             step++;
         // else, skip a large step (basically skip a voxel grid)
         } else {
@@ -482,14 +525,14 @@ __global__ void kernel_march_rays_train(
     }
 }
 
-void march_rays_train(at::Tensor rays_o, at::Tensor rays_d, at::Tensor grid, const float bound, const float dt_gamma, const uint32_t max_steps, const uint32_t N, const uint32_t C, const uint32_t H, const uint32_t M, at::Tensor nears, at::Tensor fars, at::Tensor xyzs, at::Tensor dirs, at::Tensor deltas, at::Tensor rays, at::Tensor counter, const uint32_t perturb) {
+void march_rays_train(at::Tensor rays_o, at::Tensor rays_d, at::Tensor grid, const float bound, const float dt_gamma, const uint32_t max_steps, const uint32_t N, const uint32_t C, const uint32_t H, const uint32_t M, at::Tensor nears, at::Tensor fars, at::Tensor xyzs, at::Tensor dirs, at::Tensor deltas, at::Tensor ts, at::Tensor rays, at::Tensor counter, const uint32_t perturb) {
 
     static constexpr uint32_t N_THREAD = 128;
     pcg32 rng = pcg32{(uint64_t)42}; // hard coded random seed
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
     rays_o.scalar_type(), "march_rays_train", ([&] {
-        kernel_march_rays_train<<<div_round_up(N, N_THREAD), N_THREAD>>>(rays_o.data_ptr<scalar_t>(), rays_d.data_ptr<scalar_t>(), grid.data_ptr<uint8_t>(), bound, dt_gamma, max_steps, N, C, H, M, nears.data_ptr<scalar_t>(), fars.data_ptr<scalar_t>(), xyzs.data_ptr<scalar_t>(), dirs.data_ptr<scalar_t>(), deltas.data_ptr<scalar_t>(), rays.data_ptr<int>(), counter.data_ptr<int>(), perturb, rng);
+        kernel_march_rays_train<<<div_round_up(N, N_THREAD), N_THREAD>>>(rays_o.data_ptr<scalar_t>(), rays_d.data_ptr<scalar_t>(), grid.data_ptr<uint8_t>(), bound, dt_gamma, max_steps, N, C, H, M, nears.data_ptr<scalar_t>(), fars.data_ptr<scalar_t>(), xyzs.data_ptr<scalar_t>(), dirs.data_ptr<scalar_t>(), deltas.data_ptr<scalar_t>(), ts.data_ptr<scalar_t>(), rays.data_ptr<int>(), counter.data_ptr<int>(), perturb, rng);
     }));
 }
 

@@ -2,6 +2,7 @@ name: torch-ngp
 channels:
   - pytorch
   - conda-forge
+  - pyg
 dependencies:
   - python
   - cudatoolkit=11.3
@@ -17,6 +18,7 @@ dependencies:
   - rich
   - packaging
   - scipy
+  - pytorch-scatter
   - pip:
     - torch-ema
     - PyMCubes
