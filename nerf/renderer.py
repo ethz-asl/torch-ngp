@@ -187,15 +187,14 @@ class NeRFRenderer(nn.Module):
             rays_o,
             rays_d,
             direction_norms,
-            num_steps=128,
-            upsample_steps=128,
+            num_steps=256,
+            upsample_steps=0,
             bg_color=None,
             perturb=False,
             **kwargs):
         # rays_o, rays_d: [B, N, 3], assumes B == 1
         # bg_color: [3] in range [0, 1]
         # return: image: [B, N, 3], depth: [B, N]
-        assert (num_steps == 512)
         assert (upsample_steps == 0)
         assert (bg_color is None)
 
