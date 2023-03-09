@@ -1010,7 +1010,7 @@ class Trainer(object):
                     #cv2.imwrite(save_path_gt, cv2.cvtColor((truths[0].detach().cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
 
                     semantic_map = SEMANTIC_COLORS[preds_semantic[0].argmax(
-                        dim=-1).detach().cpu().numpy()]
+                        dim=-1).detach().cpu().numpy() % len(SEMANTIC_COLORS)]
                     cv2.imwrite(save_path_semantic,
                                 cv2.cvtColor(semantic_map, cv2.COLOR_RGB2BGR))
 
