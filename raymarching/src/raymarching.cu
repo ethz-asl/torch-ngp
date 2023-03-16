@@ -149,7 +149,7 @@ __global__ void kernel_near_far_from_aabb(
 
 void near_far_from_aabb(at::Tensor rays_o, at::Tensor rays_d, at::Tensor aabb, const uint32_t N, const float min_near, at::Tensor nears, at::Tensor fars) {
 
-    static constexpr uint32_t N_THREAD = 128;
+    static constexpr uint32_t N_THREAD = 256;
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
     rays_o.scalar_type(), "near_far_from_aabb", ([&] {
