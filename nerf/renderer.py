@@ -310,13 +310,25 @@ class NeRFRenderer(nn.Module):
         semantic = (weights * semantic).sum(dim=-2)
         semantic_features = (weights * semantic_features).sum(dim=-2)
 
+        ############################################################
+        # separate contrastive head
+        ############################################################
+        contrastive_features = self.contrastive(
+            geometric_features.view(-1, geometric_features.shape[-1]), sigma)
+        contrastive_features = contrastive_features.view(
+            (geometric_features.shape[0], geometric_features.shape[1],
+             contrastive_features.shape[-1]))
+        contrastive_features = (weights * contrastive_features).sum(dim=-2)
+        ############################################################
+
         return {
             'depth': depth,
             'depth_variance': depth_variance,
             'image': image,
             'semantic': semantic,
             'semantic_features': semantic_features,
-            'coordinates_map': coordinates_map
+            'coordinates_map': coordinates_map,
+            'contrastive_features': contrastive_features
         }
 
     def run_cuda(self,
@@ -710,6 +722,8 @@ class NeRFRenderer(nn.Module):
             semantic_features = torch.empty((B, N, self.hidden_dim_semantic),
                                             device=device)
             coordinates_map = torch.empty((B, N, 3), device=device)
+            contrastive_features = torch.empty((B, N, self.hidden_dim_semantic),
+                                            device=device)
 
             for b in range(B):
                 head = 0
@@ -728,6 +742,8 @@ class NeRFRenderer(nn.Module):
                         b:b + 1, head:tail, :] = results_['semantic_features']
                     coordinates_map[b:b + 1,
                                     head:tail, :] = results_['coordinates_map']
+                    contrastive_features[
+                        b:b + 1, head:tail, :] = results_['contrastive_features']
 
                     head += max_ray_batch
 
@@ -738,6 +754,7 @@ class NeRFRenderer(nn.Module):
             results['semantic'] = semantic
             results['semantic_features'] = semantic_features
             results['coordinates_map'] = coordinates_map
+            results['contrastive_features'] = contrastive_features
         else:
             results = _run(rays_o, rays_d, direction_norms, **kwargs)
 
