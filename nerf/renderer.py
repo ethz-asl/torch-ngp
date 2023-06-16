@@ -313,12 +313,9 @@ class NeRFRenderer(nn.Module):
         ############################################################
         # separate contrastive head
         ############################################################
-        contrastive_features = self.contrastive(
-            geometric_features.view(-1, geometric_features.shape[-1]), sigma)
-        contrastive_features = contrastive_features.view(
-            (geometric_features.shape[0], geometric_features.shape[1],
-             contrastive_features.shape[-1]))
-        contrastive_features = (weights * contrastive_features).sum(dim=-2)
+        contrastive_features = self.contrastive(xyzs.reshape(-1, 3))
+        contrastive_features = contrastive_features.view(N, num_steps, -1)
+        contrastive_features = (weights.detach() * contrastive_features).sum(dim=-2)
         ############################################################
 
         return {
@@ -722,7 +719,7 @@ class NeRFRenderer(nn.Module):
             semantic_features = torch.empty((B, N, self.hidden_dim_semantic),
                                             device=device)
             coordinates_map = torch.empty((B, N, 3), device=device)
-            contrastive_features = torch.empty((B, N, self.hidden_dim_semantic),
+            contrastive_features = torch.empty((B, N, self.contrastive_feat_dim),
                                             device=device)
 
             for b in range(B):
