@@ -315,7 +315,7 @@ class NeRFRenderer(nn.Module):
         ############################################################
         contrastive_features = self.contrastive(xyzs.reshape(-1, 3))
         contrastive_features = contrastive_features.view(N, num_steps, -1)
-        contrastive_features = (weights.detach() * contrastive_features).sum(dim=-2)
+        contrastive_features = (weights * contrastive_features).sum(dim=-2)
         ############################################################
 
         return {
