@@ -299,8 +299,13 @@ class NeRFRenderer(nn.Module):
         image = image.view(*prefix, 3)
         depth = depth.view(*prefix)
 
+        # hash encoding for features
+        xyz_feature_encoding = self.feature_encoder(xyzs.reshape(-1, 3), bound=self.bound)
+
+        # semantic
         semantic, semantic_features = self.semantic(
-            geometric_features.view(-1, geometric_features.shape[-1]), sigma)
+            xyz_feature_encoding,
+            geometric_features.view(-1, geometric_features.shape[-1]))
         semantic = semantic.view(
             (geometric_features.shape[0], geometric_features.shape[1],
              self.semantic_classes))
@@ -310,13 +315,10 @@ class NeRFRenderer(nn.Module):
         semantic = (weights * semantic).sum(dim=-2)
         semantic_features = (weights * semantic_features).sum(dim=-2)
 
-        ############################################################
-        # separate contrastive head
-        ############################################################
-        contrastive_features = self.contrastive(xyzs.reshape(-1, 3))
+        # contrastive
+        contrastive_features = self.contrastive(xyz_feature_encoding)
         contrastive_features = contrastive_features.view(N, num_steps, -1)
         contrastive_features = (weights * contrastive_features).sum(dim=-2)
-        ############################################################
 
         return {
             'depth': depth,
