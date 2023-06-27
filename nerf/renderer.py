@@ -319,6 +319,7 @@ class NeRFRenderer(nn.Module):
         contrastive_features = self.contrastive(xyz_feature_encoding)
         contrastive_features = contrastive_features.view(N, num_steps, -1)
         contrastive_features = (weights * contrastive_features).sum(dim=-2)
+        contrastive_features = F.normalize(contrastive_features)
 
         return {
             'depth': depth,
