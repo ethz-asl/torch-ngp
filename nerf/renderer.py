@@ -303,9 +303,7 @@ class NeRFRenderer(nn.Module):
         xyz_feature_encoding = self.feature_encoder(xyzs.reshape(-1, 3), bound=self.bound)
 
         # semantic
-        semantic_features = self.semantic(
-            xyz_feature_encoding,
-            geometric_features.view(-1, geometric_features.shape[-1]))
+        semantic_features = self.semantic(xyz_feature_encoding)
         semantic_features = semantic_features.view(
             (geometric_features.shape[0], geometric_features.shape[1],
              semantic_features.shape[-1]))
