@@ -303,16 +303,12 @@ class NeRFRenderer(nn.Module):
         xyz_feature_encoding = self.feature_encoder(xyzs.reshape(-1, 3), bound=self.bound)
 
         # semantic
-        semantic, semantic_features = self.semantic(
+        semantic_features = self.semantic(
             xyz_feature_encoding,
             geometric_features.view(-1, geometric_features.shape[-1]))
-        semantic = semantic.view(
-            (geometric_features.shape[0], geometric_features.shape[1],
-             self.semantic_classes))
         semantic_features = semantic_features.view(
             (geometric_features.shape[0], geometric_features.shape[1],
              semantic_features.shape[-1]))
-        semantic = (weights * semantic).sum(dim=-2)
         semantic_features = (weights * semantic_features).sum(dim=-2)
 
         # contrastive
@@ -326,7 +322,6 @@ class NeRFRenderer(nn.Module):
             'depth': depth,
             'depth_variance': depth_variance,
             'image': image,
-            'semantic': semantic,
             'semantic_features': semantic_features,
             'coordinates_map': coordinates_map,
             'contrastive_features': contrastive_features
@@ -719,7 +714,6 @@ class NeRFRenderer(nn.Module):
             depth = torch.empty((B, N), device=device)
             depth_variance = torch.empty((B, N), device=device)
             image = torch.empty((B, N, 3), device=device)
-            semantic = torch.empty((B, N, self.semantic_classes), device=device)
             semantic_features = torch.empty((B, N, self.hidden_dim_semantic),
                                             device=device)
             coordinates_map = torch.empty((B, N, 3), device=device)
@@ -738,7 +732,6 @@ class NeRFRenderer(nn.Module):
                     depth[b:b + 1, head:tail] = results_['depth']
                     depth_variance[b:b + 1,
                                    head:tail] = results_['depth_variance']
-                    semantic[b:b + 1, head:tail, :] = results_['semantic']
                     semantic_features[
                         b:b + 1, head:tail, :] = results_['semantic_features']
                     coordinates_map[b:b + 1,
@@ -752,7 +745,6 @@ class NeRFRenderer(nn.Module):
             results['depth'] = depth
             results['depth_variance'] = depth_variance
             results['image'] = image
-            results['semantic'] = semantic
             results['semantic_features'] = semantic_features
             results['coordinates_map'] = coordinates_map
             results['contrastive_features'] = contrastive_features
